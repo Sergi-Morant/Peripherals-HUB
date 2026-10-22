@@ -3,6 +3,18 @@
 Roughly in the order I intend to work on them. Items marked (needs hardware) cannot be finished
 without the device being connected.
 
+## Before the next release (v0.1.1)
+
+Found while checking what is public after v0.1.0 was published:
+
+* **Replace the example MIDI file.** `examples/imperial-march-opening.mid` is a short transcription
+  of a copyrighted melody. Swap it for a public-domain tune (for example "Ode to Joy") and update
+  the README and `docs/DEVICES.md` references.
+* **Document the udev rules' reach.** `packaging/linux/70-hub.rules` gives the logged-in desktop
+  user raw access to every HID device of Logitech, Sony, Microsoft, Valve, Nintendo and SINOWEALTH,
+  keyboards and mice included. That is the usual approach for tools like this, but say so in the
+  README, and consider narrowing the rules to the product ids actually supported.
+
 ## Next
 
 1. **Mouse buttons and profiles (G502 X Plus).** The official app lets you remap every button and
