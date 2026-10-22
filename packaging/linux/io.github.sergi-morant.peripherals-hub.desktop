@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Peripherals HUB
+Comment=One app for your keyboard, mouse and game controllers
+Exec=peripherals-hub
+Icon=io.github.sergi-morant.peripherals-hub
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=keyboard;mouse;gamepad;controller;RGB;battery;DPI;rumble;

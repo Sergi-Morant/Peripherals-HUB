@@ -1,0 +1,11 @@
+[package]
+name = "hub-midi"
+description = "Turns MIDI files into vibration schedules for game controllers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hub-core.workspace = true
+midly = { version = "0.5", default-features = false, features = ["alloc", "std"] }

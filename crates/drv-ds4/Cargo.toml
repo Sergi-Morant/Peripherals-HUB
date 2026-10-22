@@ -1,0 +1,11 @@
+[package]
+name = "drv-ds4"
+description = "DualShock 4 driver (USB and Bluetooth) for the Peripherals HUB"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hub-core.workspace = true
+hidapi.workspace = true

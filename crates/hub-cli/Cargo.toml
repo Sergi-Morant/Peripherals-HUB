@@ -1,0 +1,22 @@
+[package]
+name = "hub-cli"
+description = "Command-line tool for the Peripherals HUB"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "hub"
+path = "src/main.rs"
+
+[dependencies]
+hub-core.workspace = true
+hub-midi.workspace = true
+drv-ds4.workspace = true
+drv-g502x.workspace = true
+drv-gamepads.workspace = true
+drv-steam.workspace = true
+drv-xbox.workspace = true
+clap.workspace = true
+anyhow.workspace = true

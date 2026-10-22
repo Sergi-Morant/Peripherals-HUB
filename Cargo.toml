@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hub-core",
+    "crates/hub-midi",
+    "crates/hub-cli",
+    "crates/drv-ds4",
+    "crates/drv-g502x",
+    "crates/drv-gamepads",
+    "crates/drv-steam",
+    "crates/drv-xbox",
+    "crates/s85-protocol",
+    "crates/s85-cli",
+    "crates/hub-gui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+repository = "https://github.com/Sergi-Morant/open-s85"
+
+[workspace.dependencies]
+s85-protocol = { path = "crates/s85-protocol" }
+hub-core = { path = "crates/hub-core" }
+hub-midi = { path = "crates/hub-midi" }
+drv-ds4 = { path = "crates/drv-ds4" }
+drv-g502x = { path = "crates/drv-g502x" }
+drv-gamepads = { path = "crates/drv-gamepads" }
+drv-steam = { path = "crates/drv-steam" }
+drv-xbox = { path = "crates/drv-xbox" }
+hidapi = "2"
+image = { version = "0.25", default-features = false, features = ["gif", "png", "jpeg", "bmp", "webp"] }
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"

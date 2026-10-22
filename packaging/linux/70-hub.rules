@@ -1,0 +1,19 @@
+# Let logged-in users access the peripherals without root.
+# Install: sudo cp 70-hub.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
+# RK S85 keyboard
+KERNEL=="hidraw*", ATTRS{idVendor}=="258a", TAG+="uaccess"
+# Logitech receivers and mice (HID++)
+KERNEL=="hidraw*", ATTRS{idVendor}=="046d", TAG+="uaccess"
+# Sony DualShock 4 (USB)
+KERNEL=="hidraw*", ATTRS{idVendor}=="054c", TAG+="uaccess"
+# Sony DualShock 4 (Bluetooth: the hidraw node hangs off the uhid device, not a USB parent)
+KERNEL=="hidraw*", KERNELS=="*054C:05C4*", TAG+="uaccess"
+KERNEL=="hidraw*", KERNELS=="*054C:09CC*", TAG+="uaccess"
+# Valve Steam Controller, Nintendo GameCube adapter (later milestones)
+KERNEL=="hidraw*", ATTRS{idVendor}=="28de", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="057e", TAG+="uaccess"
+# Microsoft Xbox controllers (USB, and Bluetooth where the node hangs off the uhid device)
+KERNEL=="hidraw*", ATTRS{idVendor}=="045e", TAG+="uaccess"
+KERNEL=="hidraw*", KERNELS=="*045E:*", TAG+="uaccess"
+# Nintendo Switch pads over Bluetooth
+KERNEL=="hidraw*", KERNELS=="*057E:*", TAG+="uaccess"

@@ -1,0 +1,11 @@
+[package]
+name = "drv-xbox"
+description = "Xbox One / Series controllers over Bluetooth for the Peripherals HUB"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hub-core.workspace = true
+hidapi.workspace = true

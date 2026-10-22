@@ -1,0 +1,55 @@
+[package]
+name = "hub-gui"
+description = "Desktop hub for keyboards, mice and game controllers (unofficial)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "peripherals-hub"
+path = "src/main.rs"
+
+[dependencies]
+hub-core.workspace = true
+hub-midi.workspace = true
+drv-ds4.workspace = true
+drv-g502x.workspace = true
+drv-gamepads.workspace = true
+drv-steam.workspace = true
+drv-xbox.workspace = true
+s85-protocol.workspace = true
+anyhow.workspace = true
+eframe = "0.37"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "6"
+rfd = "0.17"
+chrono = "0.4"
+
+[build-dependencies]
+winresource = "0.1"
+
+# Installers (`cargo packager --release` after `cargo build --release`): .app/.dmg on macOS,
+# a setup .exe on Windows. CI builds them on every push to main.
+[package.metadata.packager]
+productName = "Peripherals HUB"
+identifier = "io.github.sergi-morant.peripherals-hub"
+description = "One app for your keyboard, mouse and game controllers"
+homepage = "https://github.com/Sergi-Morant/Peripherals-HUB"
+publisher = "Peripherals HUB contributors"
+authors = ["Peripherals HUB contributors"]
+copyright = "GPL-3.0"
+licenseFile = "../../LICENSE"
+category = "Utility"
+outDir = "../../target/packager"
+binaries = [{ path = "peripherals-hub", main = true }]
+# The .icns is used as-is on macOS; the Windows installer and .exe use assets/icon.ico.
+# (Placeholder: still the open-s85 keyboard icon.)
+icons = ["assets/icon.icns"]
+
+[package.metadata.packager.macos]
+minimumSystemVersion = "11.0"
+
+[package.metadata.packager.nsis]
+installerIcon = "assets/icon.ico"

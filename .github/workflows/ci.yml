@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    # Pushing a tag such as v0.1.0 also packages the builds and publishes a GitHub release.
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            release: linux-x86_64
+          - os: windows-latest
+            platform: windows-x86_64
+            release: windows-x86_64
+          # Releases ship a universal (Apple Silicon + Intel) build; branch builds are arm64 only.
+          - os: macos-latest
+            platform: macos-arm64
+            release: macos-universal
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --workspace --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: peripherals-hub-${{ matrix.platform }}
+          path: |
+            target/release/peripherals-hub
+            target/release/peripherals-hub.exe
+            target/release/hub
+            target/release/hub.exe
+            target/release/s85
+            target/release/s85.exe
+            packaging/linux/70-hub.rules
+          if-no-files-found: ignore
+      # ---- Installers and archives (every push; the release job below publishes them for tags) ----
+      - name: Install cargo-packager
+        if: github.event_name == 'push' && runner.os != 'Linux'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-packager
+      - name: Universal macOS binaries
+        if: github.event_name == 'push' && runner.os == 'macOS'
+        run: |
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin
+          cargo build --release -p hub-gui -p hub-cli -p s85-cli --target x86_64-apple-darwin
+          cargo build --release -p hub-gui -p hub-cli -p s85-cli --target aarch64-apple-darwin
+          mkdir -p target/universal
+          for b in peripherals-hub hub s85; do
+            lipo -create -output "target/universal/$b" \
+              "target/x86_64-apple-darwin/release/$b" "target/aarch64-apple-darwin/release/$b"
+          done
+          lipo -info target/universal/peripherals-hub
+      - name: Installer
+        if: github.event_name == 'push' && runner.os != 'Linux'
+        shell: bash
+        run: |
+          prefix="peripherals-hub-${GITHUB_REF_NAME}-${{ matrix.release }}"
+          cd crates/hub-gui
+          if [ "$RUNNER_OS" = macOS ]; then
+            cargo packager --release -f app --binaries-dir ../../target/universal
+            cd ../..
+            ls target/packager
+            app="$(ls -d target/packager/*.app | head -n 1)"
+            # Ad-hoc signature: unsigned downloads are reported as "damaged" on Apple Silicon;
+            # ad-hoc signed ones get the usual "Open Anyway" prompt instead.
+            codesign --force --deep --sign - "$app"
+            codesign --verify --verbose "$app"
+            mkdir dmg
+            cp -R "$app" dmg/
+            ln -s /Applications dmg/Applications
+            hdiutil create -volname "Peripherals HUB" -srcfolder dmg -ov -format UDZO "$prefix.dmg"
+          else
+            cargo packager --release -f nsis
+            mv ../../target/packager/*-setup.exe "../../$prefix-setup.exe"
+          fi
+      # Archives keep the executable bit, unlike the artifact zips above.
+      - name: Package release archive
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          name="peripherals-hub-${GITHUB_REF_NAME}-${{ matrix.release }}"
+          mkdir "$name"
+          cp README.md LICENSE CHANGELOG.md "$name/"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp target/release/peripherals-hub.exe target/release/hub.exe target/release/s85.exe "$name/"
+            7z a "$name.zip" "$name" > /dev/null
+          elif [ "$RUNNER_OS" = macOS ]; then
+            cp target/universal/peripherals-hub target/universal/hub target/universal/s85 "$name/"
+            tar czf "$name.tar.gz" "$name"
+          else
+            cp target/release/peripherals-hub target/release/hub target/release/s85 packaging/linux/70-hub.rules \
+              packaging/linux/install.sh packaging/linux/io.github.sergi-morant.peripherals-hub.desktop "$name/"
+            mkdir "$name/icons"
+            cp crates/hub-gui/assets/icons/*.png "$name/icons/"
+            tar czf "$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: release-${{ matrix.release }}
+          path: |
+            peripherals-hub-*.zip
+            peripherals-hub-*.tar.gz
+            peripherals-hub-*.dmg
+            peripherals-hub-*-setup.exe
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Release notes from CHANGELOG.md
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v v="$ver" '/^## /{ p = index($0, "## " v " ") == 1; next } p' CHANGELOG.md > notes.md
+          sed "s/VERSION/${GITHUB_REF_NAME}/g" packaging/release-notes.md >> notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Peripherals HUB ${{ github.ref_name }}
+          body_path: notes.md
+          prerelease: true
+          files: dist/*
