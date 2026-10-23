@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use hub_core::{Capability, Effect, EffectSetting, HidApi, Hub, Motor, Peripheral, Rgb};
+use hub_core::{ButtonAction, Capability, Effect, EffectSetting, HidApi, Hub, Motor, Peripheral, Rgb};
 
 #[derive(Parser)]
 #[command(name = "hub", version, about = "Control tool for the Peripherals HUB")]
@@ -67,6 +67,18 @@ enum Cmd {
         #[arg(long, default_value_t = 60)]
         volume: u8,
     },
+    /// Show the onboard profiles and what each button does: `hub profiles g502`.
+    Profiles { device: String },
+    /// Show which onboard profile is running, or switch: `hub profile g502 1`.
+    Profile { device: String, number: Option<usize> },
+    /// Save all onboard profiles to a file: `hub backup g502 g502.profiles`.
+    Backup { device: String, file: std::path::PathBuf },
+    /// Write a backup file back to the mouse: `hub restore g502 g502.profiles`.
+    Restore { device: String, file: std::path::PathBuf },
+    /// Remap a button of a profile (numbers as in `hub profiles`): `hub button g502 1 4 mouse:forward`.
+    /// ACTION is mouse:left|right|middle|back|forward|N, key:HEXUSAGE[+ctrl+shift+alt+meta],
+    /// media:HEXUSAGE, fn:NAME (e.g. fn:cycle-dpi), or none.
+    Button { device: String, profile: usize, button: usize, action: String },
     /// Show or set the DPI: `hub dpi g502 1600`.
     Dpi { device: String, value: Option<u16> },
     /// Show or set the polling rate in Hz: `hub rate g502 500`.
@@ -125,6 +137,48 @@ fn matches(p: &dyn Peripheral, q: &str) -> bool {
     i.name.to_lowercase().contains(&q) || i.id.to_lowercase().contains(&q)
 }
 
+fn parse_action(s: &str) -> Result<ButtonAction> {
+    use hub_core::function_name;
+    let (kind, rest) = s.split_once(':').unwrap_or((s, ""));
+    Ok(match kind {
+        "none" | "disabled" => ButtonAction::Disabled,
+        "mouse" => ButtonAction::Mouse(match rest {
+            "left" => 0x0001,
+            "right" => 0x0002,
+            "middle" => 0x0004,
+            "back" => 0x0008,
+            "forward" => 0x0010,
+            n => {
+                let number = n.parse::<u32>().ok().filter(|n| (1..=16).contains(n));
+                1u16 << (number.ok_or_else(|| anyhow::anyhow!("unknown mouse button '{n}'"))? - 1)
+            }
+        }),
+        "key" => {
+            let mut parts = rest.split('+');
+            let usage = u8::from_str_radix(parts.next().unwrap_or(""), 16)?;
+            let mut modifiers = 0;
+            for m in parts {
+                modifiers |= match m {
+                    "ctrl" => 1,
+                    "shift" => 2,
+                    "alt" => 4,
+                    "meta" => 8,
+                    _ => bail!("unknown modifier '{m}'"),
+                };
+            }
+            ButtonAction::Key { modifiers, usage }
+        }
+        "media" => ButtonAction::Consumer(u16::from_str_radix(rest, 16)?),
+        "fn" => {
+            let id = (0..=0x11u8)
+                .find(|&i| function_name(i).replace(' ', "-") == rest)
+                .ok_or_else(|| anyhow::anyhow!("unknown function '{rest}'"))?;
+            ButtonAction::Function { id, data: 0 }
+        }
+        _ => bail!("cannot read action '{s}'"),
+    })
+}
+
 fn find<'a>(devices: &'a mut [Box<dyn Peripheral>], q: &str) -> Result<&'a mut Box<dyn Peripheral>> {
     match devices.iter_mut().find(|d| matches(d.as_ref(), q)) {
         Some(d) => Ok(d),
@@ -160,7 +214,10 @@ fn main() -> Result<()> {
                         Capability::ReportRate(l) => println!("    report rate: {l:?} Hz"),
                         Capability::HostMode => println!("    onboard/host mode"),
                         Capability::Tones(n) => println!("    tones: {n} voices"),
-                    Capability::Speaker => println!("    speaker"),
+                        Capability::Speaker => println!("    speaker"),
+                        Capability::Profiles { profiles, buttons } => {
+                            println!("    onboard profiles: {profiles} profiles, {buttons} buttons")
+                        }
                         Capability::Rumble(m) => println!("    rumble: {}", m.iter().map(|m| m.label()).collect::<Vec<_>>().join(", ")),
                     }
                 }
@@ -321,6 +378,57 @@ fn main() -> Result<()> {
         Cmd::Tone { device, voice, hz, ms, volume } => {
             find(&mut devices, &device)?.tone(voice, hz, ms, volume)?;
             std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+        }
+        Cmd::Profiles { device } => {
+            let d = find(&mut devices, &device)?;
+            for p in d.profiles()? {
+                println!(
+                    "Profile {} {}{}: {} ms, DPI {:?} (default #{}, shift #{}), colour {:02x}{:02x}{:02x}",
+                    p.index,
+                    if p.name.is_empty() { String::new() } else { format!("\"{}\" ", p.name) },
+                    if p.enabled { "" } else { "(disabled)" },
+                    p.report_interval_ms,
+                    p.dpi_levels,
+                    p.default_dpi_index + 1,
+                    p.shift_dpi_index + 1,
+                    p.color.0,
+                    p.color.1,
+                    p.color.2
+                );
+                for (i, b) in p.buttons.iter().enumerate() {
+                    println!("  button {:>2}: {}", i + 1, b.label());
+                }
+            }
+        }
+        Cmd::Profile { device, number } => {
+            let d = find(&mut devices, &device)?;
+            if let Some(n) = number {
+                if n == 0 {
+                    bail!("profile numbers start at 1");
+                }
+                d.set_active_profile(n - 1)?;
+            }
+            match d.active_profile()? {
+                Some(i) => println!("running profile {}", i + 1),
+                None => println!("running a profile that is not in the directory"),
+            }
+        }
+        Cmd::Backup { device, file } => {
+            let text = find(&mut devices, &device)?.export_profiles()?;
+            std::fs::write(&file, text)?;
+            println!("saved to {}", file.display());
+        }
+        Cmd::Restore { device, file } => {
+            find(&mut devices, &device)?.import_profiles(&std::fs::read_to_string(&file)?)?;
+            println!("restored from {}", file.display());
+        }
+        Cmd::Button { device, profile, button, action } => {
+            let a = parse_action(&action)?;
+            if profile == 0 || button == 0 {
+                bail!("profile and button numbers start at 1");
+            }
+            find(&mut devices, &device)?.set_button(profile - 1, button - 1, a)?;
+            println!("profile {profile} button {button}: {}", a.label());
         }
         Cmd::Dpi { device, value } => {
             let d = find(&mut devices, &device)?;

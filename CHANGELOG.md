@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+* **G502 X Plus onboard profiles** (command line): `hub profiles`, `hub button`, `hub profile`,
+  `hub backup`, `hub restore`. One button was remapped on the real mouse and worked; the factory
+  ROM profiles are copied to flash on the first edit (see `docs/DEVICES.md`).
 * **DualShock 4 speaker** (Bluetooth): `hub speaker ds4 file.wav` / `--tone HZ` and
   `hub play ds4 song.mid --speaker`, with a built-in SBC encoder. Test tone verified on hardware.
 * Example MIDI replaced by a public-domain tune (`examples/ode-to-joy.mid`); the README explains how

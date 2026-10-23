@@ -21,7 +21,36 @@ appear once it is moved.
 | DPI | `0x2201`, list in function 1 (16-bit values, `0xE000|step` = range), get 2, set 3 | verified (set 1600, read back, restored) |
 | Polling rate | `0x8060`, list 0, get 1, set 2 (ms) | verified, **only in host mode** |
 | Onboard/host switch | `0x8100`, get mode 2, set mode 1 (1 = onboard, 2 = host) | verified (toggled and restored) |
+| Onboard profiles and button remapping | `0x8100` memory functions, see below | verified: one button remapped, read back, and the mouse then acted on it (G5); restored afterwards |
 | Lighting | `0x8071` RGB Effects: static (id 1), breathe (`0x0A`), cycle (3), off (0). Takes software control first (function 5), then function 1 with the effect index and 10 parameter bytes, volatile | static colour confirmed by the user; the other effects were accepted (sent) |
+
+### Onboard profiles and buttons (`hub profiles`, `hub button`, `hub backup`, `hub restore`)
+
+Layout from Solaar's `hidpp20.py`. Function 0 describes the memory (this mouse: 5 profiles, 11
+buttons, 16 sectors of **255** bytes); function 5 reads 16 bytes of a sector, 6/7/8 start, write and
+finish a sector write, 4 returns the sector of the running profile and 3 selects one (after mode 1).
+A profile sector holds the polling interval (byte 0), five DPI steps (LE), colour, 11 four-byte
+button entries from byte 32, a UTF-16 name at 160 and lighting, with a CRC-16/CCITT-FALSE in the last
+two bytes. Button entries: `80 01 <mask>` mouse button, `80 02 <mods> <usage>` key, `80 03` media
+key, `90 <id> 00 <data>` function (DPI shift, cycle profile...), macros `0x/1x`.
+
+* **This mouse runs factory ROM profiles** (directory at sector `0x0100`, profiles `0x0101` and
+  `0x0102`, no checksum) until a directory exists in flash sector 0, which was empty. ROM cannot be
+  written, so the first edit copies the profiles into flash sectors 1 and 2 (with a checksum),
+  writes a flash directory, then edits the button. If the copy fails half way the directory is
+  still empty and the mouse keeps its ROM profiles.
+* `hub restore` of a backup taken in that factory state **erases the flash directory** (all `ff`, as
+  it was) instead of writing, which makes the mouse fall back to its ROM profiles. A backup of this
+  mouse in its original state is what `hub backup` writes first.
+* Every write is read back and compared. Edited sectors must have a valid checksum first. Button
+  numbers in `hub profiles` are profile slots: slot 4 is **G4** (back), slot 6 is **G5** (forward).
+  The other slots are inferred from their default function (slot 5 DPI shift = the paddle, 7/8 tilt,
+  9 cycle profile, 10 next DPI, 11 previous DPI) and not matched to the labels on the mouse yet.
+* After an edit the mouse must run that profile: `hub profile g502 1` switches (the driver does it
+  by itself when the edited profile was the running one). The mouse was running profile 2 when
+  first checked, so the edit only showed after switching to profile 1.
+* Not done: macros, the G-shift button layer (bytes 96..), lighting and names, adding or removing
+  profiles, DPI steps per profile, a GUI.
 
 Notes and caveats:
 
@@ -32,7 +61,7 @@ Notes and caveats:
 * The current lighting effect cannot be read back, so the UI starts from "static white".
 * Lighting is volatile; it may revert when the mouse sleeps or is power-cycled.
 * Bluetooth and USB-cable modes of this mouse are untested (Bluetooth devices are skipped, see
-  below), and button remapping is not implemented.
+  below).
 * Some non-Logitech Bluetooth devices reuse Logitech's vendor id (the RK S85 keyboard does), so the
   driver never sends HID++ to Bluetooth devices.
 

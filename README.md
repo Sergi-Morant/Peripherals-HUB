@@ -21,7 +21,7 @@ Royal Kludge RK S85 keyboard, whose code is embedded here unchanged.
 
 | Device | Connection | Battery | Lighting | Other |
 |---|---|---|---|---|
-| Logitech G502 X Plus | 2.4 GHz (Lightspeed receiver) | verified | effects: static, breathe, colour cycle, off | DPI, polling rate, onboard/host switch (verified) |
+| Logitech G502 X Plus | 2.4 GHz (Lightspeed receiver) | verified | effects: static, breathe, colour cycle, off | DPI, polling rate, onboard/host switch, button remapping in the onboard profiles (command line; verified) |
 | Sony DualShock 4 | Bluetooth | verified | lightbar colour (verified) | rumble, built-in speaker (test tone verified) |
 | Xbox Series controller | Bluetooth | verified (via the OS Bluetooth stack, Linux only) | – | rumble incl. triggers |
 | Steam Controller | 2.4 GHz (Steam Controller Puck) | verified | – | haptic tones (verified), MIDI playback |
@@ -32,7 +32,7 @@ Royal Kludge RK S85 keyboard, whose code is embedded here unchanged.
 Music: pick a `.mid` file and the haptics play it. The Steam Controller plays real notes on two
 voices; DualShock 4 and Xbox motors cannot change pitch, so the song becomes a rhythm there.
 
-Not done yet (see [docs/ROADMAP.md](docs/ROADMAP.md)): mouse button remapping and onboard profiles,
+Not done yet (see [docs/ROADMAP.md](docs/ROADMAP.md)): a GUI for mouse button remapping (the command line works),
 controller button remapping, Steam Controller rumble and wired/Bluetooth modes, Xbox over USB or
 the 2.4 GHz adapter, GameCube adapter ports, remembered colours, Windows/macOS battery sources.
 
@@ -97,6 +97,11 @@ hub effect g502 breathe 0000ff --period 3000
 hub dpi g502 1600                          # show with no value
 hub rate g502 500                          # polling rate in Hz (needs host mode, see DEVICES.md)
 hub mode g502 host|onboard|show
+hub backup g502 mouse.profiles             # always do this first
+hub profiles g502                          # profiles and what every button does
+hub button g502 1 6 mouse:back             # profile 1, button 6 (G5); also key:04+ctrl, media:CD, fn:cycle-dpi, none
+hub profile g502 1                         # run profile 1
+hub restore g502 mouse.profiles
 hub rumble xbox --strong 60 --right 40 --ms 600
 hub tone steam --voice 0 --hz 220
 hub play steam examples/ode-to-joy.mid

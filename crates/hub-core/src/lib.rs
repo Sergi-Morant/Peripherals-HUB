@@ -173,6 +173,97 @@ impl Motor {
     }
 }
 
+/// What a mouse button does, as stored in an onboard profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonAction {
+    /// Sends nothing.
+    Disabled,
+    /// A mouse button, as a bit mask: 1 left, 2 right, 4 middle, 8 back, 0x10 forward, 0x20 button 6,
+    /// 0x40/0x80 scroll left/right, 0x100.. buttons 9 and up.
+    Mouse(u16),
+    /// A keyboard key (USB HID usage id) with modifier bits (1 ctrl, 2 shift, 4 alt, 8 meta).
+    Key { modifiers: u8, usage: u8 },
+    /// A media key (USB HID consumer usage).
+    Consumer(u16),
+    /// A built-in function (DPI up/down/cycle/shift, profile switch...), see [`function_name`].
+    Function { id: u8, data: u8 },
+    /// Starts or stops a stored macro (the macro itself is not editable here).
+    Macro { sector: u16, address: u16, stop: bool },
+    /// Anything this crate does not understand; kept so it can be written back unchanged.
+    Raw([u8; 4]),
+}
+
+pub fn function_name(id: u8) -> &'static str {
+    match id {
+        0x00 => "none",
+        0x01 => "tilt left",
+        0x02 => "tilt right",
+        0x03 => "next DPI",
+        0x04 => "previous DPI",
+        0x05 => "cycle DPI",
+        0x06 => "default DPI",
+        0x07 => "DPI shift",
+        0x08 => "next profile",
+        0x09 => "previous profile",
+        0x0A => "cycle profile",
+        0x0B => "G-shift",
+        0x0C => "battery status",
+        0x0D => "select profile",
+        0x0E => "switch mode",
+        0x0F => "host button",
+        0x10 => "scroll down",
+        0x11 => "scroll up",
+        _ => "unknown function",
+    }
+}
+
+pub fn mouse_button_name(mask: u16) -> String {
+    match mask {
+        0x0001 => "left click".into(),
+        0x0002 => "right click".into(),
+        0x0004 => "middle click".into(),
+        0x0008 => "back".into(),
+        0x0010 => "forward".into(),
+        0x0040 => "scroll left".into(),
+        0x0080 => "scroll right".into(),
+        m if m.count_ones() == 1 => format!("button {}", m.trailing_zeros() + 1),
+        m => format!("buttons {m:#06x}"),
+    }
+}
+
+impl ButtonAction {
+    pub fn label(&self) -> String {
+        match *self {
+            ButtonAction::Disabled => "disabled".into(),
+            ButtonAction::Mouse(m) => mouse_button_name(m),
+            ButtonAction::Key { modifiers, usage } => format!("key {usage:#04x} (modifiers {modifiers:#04x})"),
+            ButtonAction::Consumer(c) => format!("media key {c:#06x}"),
+            ButtonAction::Function { id, data } if data != 0 => format!("{} ({data})", function_name(id)),
+            ButtonAction::Function { id, .. } => function_name(id).into(),
+            ButtonAction::Macro { stop: false, .. } => "run a macro".into(),
+            ButtonAction::Macro { stop: true, .. } => "stop a macro".into(),
+            ButtonAction::Raw(b) => format!("unknown {:02x}{:02x}{:02x}{:02x}", b[0], b[1], b[2], b[3]),
+        }
+    }
+}
+
+/// One onboard profile of a mouse: what it stores in its own memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Profile {
+    /// 1-based position in the profile list.
+    pub index: usize,
+    pub enabled: bool,
+    pub name: String,
+    /// Polling interval in milliseconds (1 = 1000 Hz).
+    pub report_interval_ms: u8,
+    /// The five DPI steps (0 = unused).
+    pub dpi_levels: Vec<u16>,
+    pub default_dpi_index: u8,
+    pub shift_dpi_index: u8,
+    pub color: Rgb,
+    pub buttons: Vec<ButtonAction>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Capability {
     Battery,
@@ -188,6 +279,8 @@ pub enum Capability {
     Rumble(Vec<Motor>),
     /// Actuators that can play a pitch (this many voices), as the Steam Controller's haptics can.
     Tones(u8),
+    /// Remappable buttons and editable onboard profiles (this many profiles, this many buttons).
+    Profiles { profiles: u8, buttons: u8 },
     /// A built-in speaker that plays audio streamed to it.
     Speaker,
     /// The device can run its own stored profile (onboard) or take settings from the host.
@@ -241,6 +334,31 @@ pub trait Peripheral: Send {
     /// and return when it has been sent; `volume` is 0..=100.
     fn play_audio(&mut self, _samples: &[i16], _rate: u32, _channels: u16, _volume: u8) -> Result<()> {
         Err(Error::Unsupported("speaker"))
+    }
+    /// Read the onboard profiles (read-only).
+    fn profiles(&mut self) -> Result<Vec<Profile>> {
+        Err(Error::Unsupported("profiles"))
+    }
+    /// Index (0-based) of the onboard profile the mouse is running, if known.
+    fn active_profile(&mut self) -> Result<Option<usize>> {
+        Err(Error::Unsupported("profiles"))
+    }
+    /// Run onboard profile `profile` (0-based); also switches the mouse to onboard mode.
+    fn set_active_profile(&mut self, _profile: usize) -> Result<()> {
+        Err(Error::Unsupported("profiles"))
+    }
+    /// Change what one button of one profile (`profile` and `button` are 0-based) does. Everything
+    /// else in the profile is written back byte for byte.
+    fn set_button(&mut self, _profile: usize, _button: usize, _action: ButtonAction) -> Result<()> {
+        Err(Error::Unsupported("button remapping"))
+    }
+    /// A text backup of the whole onboard memory that [`Peripheral::import_profiles`] accepts.
+    fn export_profiles(&mut self) -> Result<String> {
+        Err(Error::Unsupported("profile backup"))
+    }
+    /// Write a backup made by [`Peripheral::export_profiles`] back to the device.
+    fn import_profiles(&mut self, _backup: &str) -> Result<()> {
+        Err(Error::Unsupported("profile backup"))
     }
     fn set_dpi(&mut self, _dpi: u16) -> Result<()> {
         Err(Error::Unsupported("dpi"))

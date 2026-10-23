@@ -7,12 +7,14 @@
 //! onboard/host switch 0x8100; function numbers and the DPI list encoding follow Solaar's
 //! `hidpp20.py`/`settings_templates.py`, effect parameter offsets its `LEDEffects` table.
 
+mod onboard;
+
 use std::time::{Duration, Instant};
 
 use hidapi::{HidApi, HidDevice};
 use hub_core::{
-    transport_of, Battery, Capability, Driver, Effect, EffectSetting, Error, Info, Kind, Peripheral, Result, Rgb,
-    Settings, Transport,
+    transport_of, Battery, ButtonAction, Capability, Driver, Effect, EffectSetting, Error, Info, Kind, Peripheral,
+    Profile, Result, Rgb, Settings, Transport,
 };
 
 const VID: u16 = 0x046D;
@@ -31,6 +33,8 @@ const F_RGB_EFFECTS: u16 = 0x8071;
 const F_ADJUSTABLE_DPI: u16 = 0x2201;
 const F_REPORT_RATE: u16 = 0x8060;
 const F_ONBOARD_PROFILES: u16 = 0x8100;
+/// Sectors below this number are writable flash; the factory default directory is in ROM at 0x0100.
+const ROM_DIRECTORY: u16 = 0x0100;
 
 pub struct Hidpp {
     hid: HidDevice,
@@ -316,6 +320,120 @@ impl Hidpp {
     }
 }
 
+/// Onboard profile memory (0x8100): functions 0 = description, 5 = read 16 bytes, 6/7/8 = start,
+/// write 16 bytes, finish a sector write.
+impl Hidpp {
+    fn read_sector(&self, ix: u8, sector: u16, size: usize) -> Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(size);
+        let read = |offset: usize| {
+            let [sh, sl] = sector.to_be_bytes();
+            let [oh, ol] = (offset as u16).to_be_bytes();
+            self.call(ix, 5, &[sh, sl, oh, ol])
+        };
+        let mut offset = 0;
+        while offset + 16 <= size {
+            out.extend_from_slice(&read(offset)?);
+            offset += 16;
+        }
+        if offset < size {
+            // A tail shorter than 16 bytes: read the last 16 bytes and keep what is missing.
+            let last = read(size - 16)?;
+            out.extend_from_slice(&last[16 - (size - offset)..]);
+        }
+        Ok(out)
+    }
+
+    /// Write a whole sector. Callers check before that it differs from what is stored.
+    fn write_sector(&self, ix: u8, sector: u16, data: &[u8]) -> Result<()> {
+        let [sh, sl] = sector.to_be_bytes();
+        let [lh, ll] = (data.len() as u16).to_be_bytes();
+        self.call(ix, 6, &[sh, sl, 0, 0, lh, ll])?;
+        for chunk in data.chunks(16) {
+            self.call(ix, 7, chunk)?;
+        }
+        self.call(ix, 8, &[])?;
+        Ok(())
+    }
+
+    fn onboard_description(&self, ix: u8) -> Result<onboard::Description> {
+        Ok(onboard::Description::parse(&self.call(ix, 0, &[])?))
+    }
+
+    /// The directory sector (flash sector 0, or the factory ROM one when flash has none) and its bytes.
+    fn onboard_directory(&self, ix: u8, d: &onboard::Description) -> Result<(u16, Vec<u8>)> {
+        let mut number = 0;
+        let mut raw = self.read_sector(ix, number, d.sector_size as usize)?;
+        if raw[..4] == [0; 4] || raw[..4] == [0xFF; 4] {
+            number = ROM_DIRECTORY;
+            raw = self.read_sector(ix, number, d.sector_size as usize)?;
+        }
+        Ok((number, raw))
+    }
+
+    fn profile_sectors(&self, ix: u8, d: &onboard::Description) -> Result<(u16, Vec<u8>, Vec<onboard::Sector>)> {
+        let (dir_sector, dir) = self.onboard_directory(ix, d)?;
+        let sectors = onboard::parse_directory(&dir)
+            .into_iter()
+            .map(|(number, enabled)| {
+                Ok(onboard::Sector { number, enabled, raw: self.read_sector(ix, number, d.sector_size as usize)? })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok((dir_sector, dir, sectors))
+    }
+
+    /// The mouse runs from its factory ROM profiles until a directory exists in flash. Copy those
+    /// profiles into flash sectors 1.. and write a flash directory pointing at them, so that they
+    /// can be edited. Profiles go first and the directory last: if anything fails half way the
+    /// mouse still sees an empty flash directory and keeps using the ROM profiles.
+    fn make_profiles_writable(&self, ix: u8, d: &onboard::Description) -> Result<()> {
+        let (dir_sector, _, sectors) = self.profile_sectors(ix, d)?;
+        if dir_sector == 0 {
+            return Ok(());
+        }
+        if sectors.len() + 1 > d.sector_count as usize {
+            return Err(Error::Protocol("not enough flash sectors to copy the profiles".into()));
+        }
+        // The factory sectors carry no checksum (their last two bytes are `ff ff`); the flash copies
+        // get one, as Solaar writes it.
+        for (i, s) in sectors.iter().enumerate() {
+            let mut copy = s.clone();
+            copy.fix_crc();
+            self.write_sector_checked(ix, i as u16 + 1, &copy.raw)?;
+        }
+        let entries: Vec<(u16, bool)> = sectors.iter().enumerate().map(|(i, s)| (i as u16 + 1, s.enabled)).collect();
+        self.write_sector_checked(ix, 0, &onboard::build_directory(&entries, d.sector_size as usize))?;
+        Ok(())
+    }
+
+    /// Sector number of the profile the mouse is running (function 4, only valid in onboard mode).
+    fn active_sector(&self, ix: u8) -> Result<u16> {
+        let r = self.call(ix, 4, &[])?;
+        Ok(u16::from_be_bytes([r[0], r[1]]))
+    }
+
+    /// Switch to onboard mode and run the profile stored in `sector` (functions 1 and 3).
+    fn select_sector(&self, ix: u8, sector: u16) -> Result<()> {
+        self.call(ix, 1, &[1])?;
+        let [hi, lo] = sector.to_be_bytes();
+        self.call(ix, 3, &[hi, lo])?;
+        Ok(())
+    }
+
+    /// Write `sector` only if its content differs from the mouse's, then read it back to check.
+    fn write_sector_checked(&self, ix: u8, number: u16, data: &[u8]) -> Result<bool> {
+        let n = data.len();
+        let stored = self.read_sector(ix, number, n)?;
+        if stored == data {
+            return Ok(false);
+        }
+        self.write_sector(ix, number, data)?;
+        if self.read_sector(ix, number, n)? != data {
+            return Err(Error::Protocol(format!("sector {number} does not read back the data just written")));
+        }
+        Ok(true)
+    }
+}
+
 pub struct G502x {
     h: Hidpp,
     info: Info,
@@ -358,10 +476,24 @@ impl G502x {
                 }
             }
         }
-        if matches!(h.feature(F_ONBOARD_PROFILES), Ok(Some(_))) {
+        if let Ok(Some(ix)) = h.feature(F_ONBOARD_PROFILES) {
             caps.push(Capability::HostMode);
+            if let Ok(d) = h.onboard_description(ix) {
+                if d.supported() {
+                    caps.push(Capability::Profiles { profiles: d.profile_count, buttons: d.button_count });
+                }
+            }
         }
         G502x { h, info, caps, effect_index }
+    }
+
+    fn onboard(&self) -> Result<(u8, onboard::Description)> {
+        let ix = self.h.feature(F_ONBOARD_PROFILES)?.ok_or(Error::Unsupported("profiles"))?;
+        let d = self.h.onboard_description(ix)?;
+        if !d.supported() {
+            return Err(Error::Protocol(format!("unsupported onboard memory layout: {d:?}")));
+        }
+        Ok((ix, d))
     }
 
     fn rgb_ix(&self) -> Result<u8> {
@@ -437,6 +569,83 @@ impl Peripheral for G502x {
             return Err(Error::Protocol(format!("{hz} Hz is not a rate this mouse accepts")));
         }
         self.h.call(ix, 2, &[(1000 / hz) as u8])?;
+        Ok(())
+    }
+
+    fn profiles(&mut self) -> Result<Vec<Profile>> {
+        let (ix, d) = self.onboard()?;
+        let (_, _, sectors) = self.h.profile_sectors(ix, &d)?;
+        Ok(sectors.iter().enumerate().map(|(i, s)| s.to_profile(i + 1, d.button_count as usize)).collect())
+    }
+
+    fn set_button(&mut self, profile: usize, button: usize, action: ButtonAction) -> Result<()> {
+        let (ix, d) = self.onboard()?;
+        if button >= d.button_count as usize {
+            return Err(Error::Protocol(format!("this mouse has {} buttons", d.button_count)));
+        }
+        // Remember whether the profile being edited is the one the mouse runs: after the factory
+        // profiles are copied to flash the mouse would otherwise keep running the ROM copy.
+        let was_active = {
+            let active = self.h.active_sector(ix)?;
+            let (_, dir) = self.h.onboard_directory(ix, &d)?;
+            onboard::parse_directory(&dir).iter().position(|(s, _)| *s == active) == Some(profile)
+        };
+        self.h.make_profiles_writable(ix, &d)?;
+        let (_, _, sectors) = self.h.profile_sectors(ix, &d)?;
+        let mut sector = sectors.get(profile).cloned().ok_or_else(|| Error::Protocol(format!("no profile {}", profile + 1)))?;
+        if !sector.crc_ok() {
+            return Err(Error::Protocol("the stored profile has a bad checksum, not touching it".into()));
+        }
+        sector.set_button(button, action);
+        self.h.write_sector_checked(ix, sector.number, &sector.raw)?;
+        if was_active {
+            self.h.select_sector(ix, sector.number)?;
+        }
+        Ok(())
+    }
+
+    fn active_profile(&mut self) -> Result<Option<usize>> {
+        let (ix, d) = self.onboard()?;
+        let active = self.h.active_sector(ix)?;
+        let (_, dir) = self.h.onboard_directory(ix, &d)?;
+        Ok(onboard::parse_directory(&dir).iter().position(|(s, _)| *s == active))
+    }
+
+    fn set_active_profile(&mut self, profile: usize) -> Result<()> {
+        let (ix, d) = self.onboard()?;
+        let (_, dir) = self.h.onboard_directory(ix, &d)?;
+        let (sector, _) = *onboard::parse_directory(&dir)
+            .get(profile)
+            .ok_or_else(|| Error::Protocol(format!("no profile {}", profile + 1)))?;
+        self.h.select_sector(ix, sector)
+    }
+
+    fn export_profiles(&mut self) -> Result<String> {
+        let (ix, d) = self.onboard()?;
+        let (dir_sector, dir, sectors) = self.h.profile_sectors(ix, &d)?;
+        Ok(onboard::backup_text(&self.info.name, dir_sector, &dir, &sectors))
+    }
+
+    fn import_profiles(&mut self, backup: &str) -> Result<()> {
+        let (ix, d) = self.onboard()?;
+        let b = onboard::parse_backup(backup).map_err(Error::Protocol)?;
+        if b.sectors.iter().any(|s| s.raw.len() != d.sector_size as usize) || b.directory.len() != d.sector_size as usize {
+            return Err(Error::Protocol("the backup was made for a different memory layout".into()));
+        }
+        if b.directory_sector == 0 && b.sectors.iter().any(|s| s.number >= d.sector_count as u16) {
+            return Err(Error::Protocol("the backup refers to sectors this mouse does not have".into()));
+        }
+        if b.directory_sector == 0 {
+            for s in &b.sectors {
+                self.h.write_sector_checked(ix, s.number, &s.raw)?;
+            }
+            self.h.write_sector_checked(ix, 0, &b.directory)?;
+        } else {
+            // The backup was taken while the mouse ran its factory ROM profiles, which cannot be
+            // written. Going back to that state means erasing the flash directory (all 0xFF, as it
+            // was when the mouse was new), after which the mouse uses the ROM profiles again.
+            self.h.write_sector_checked(ix, 0, &vec![0xFF; d.sector_size as usize])?;
+        }
         Ok(())
     }
 

@@ -14,10 +14,10 @@ Found while checking what is public after v0.1.0 was published:
 
 ## Next
 
-1. **Mouse buttons and profiles (G502 X Plus).** The official app lets you remap every button and
-   edit onboard profiles. Implement HID++ `0x8100` onboard profiles (read/write the profile memory
-   sectors) and/or `0x1B04` reprogrammable controls; read and compare before ever writing; export a
-   backup of the profile first.
+1. **Mouse buttons and profiles (G502 X Plus), GUI and the rest.** Reading, backup/restore and
+   button remapping work from the command line (see `docs/DEVICES.md`). Missing: a GUI panel,
+   macros, the G-shift layer, DPI steps/polling/colour/name per profile, adding and removing
+   profiles, matching every slot to the labels on the mouse (only G4 and G5 are confirmed).
 2. **Windows and macOS first run.** Test the CI builds, fix what breaks, add the missing battery
    sources (Xbox via XInput/WinRT BLE battery, macOS IOKit) and Windows permissions notes.
 3. **Remembered settings.** Store each device's colour/effect/DPI per serial and re-apply it when
