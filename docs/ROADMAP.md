@@ -3,6 +3,11 @@
 Roughly in the order I intend to work on them. Items marked (needs hardware) cannot be finished
 without the device being connected.
 
+## Found while testing on macOS (open)
+
+See [HANDOFF.md](HANDOFF.md): the Steam Controller (through the Puck) takes over the trackpad and
+shows up as a keyboard; an exclusive-open fix is in but unverified on a Mac.
+
 ## Before the next release (v0.1.1)
 
 Found while checking what is public after v0.1.0 was published:

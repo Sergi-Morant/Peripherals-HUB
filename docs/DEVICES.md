@@ -100,6 +100,11 @@ the two disagree in places:
   and bit allocation).
 * Over USB the speaker is a normal USB audio device, so this path is Bluetooth only.
 
+**MIDI on the speaker and the motors together** (`hub play ds4 song.mid --both`, the music card's
+"Speaker" + "Vibration"): the rumble rhythm is carried in the control bytes of the audio reports (a
+`0x15` report is sent whenever the motor levels change, otherwise every third). Sent; see the
+status below.
+
 Not done: the `0x17` four-frame report, stopping playback early, a GUI control, and the
 headphone-jack path.
 
@@ -122,6 +127,11 @@ Needs read/write access to the hidraw node; without the udev rules the pad is li
 "Cannot control this device" note.
 
 ## Steam Controller (2026) through the Steam Controller Puck (`28de:1304`)
+
+> **macOS (reported, not understood):** the controller takes over the trackpad and appears as a
+> keyboard while the hub runs. hidapi's default exclusive open on macOS is switched off
+> (`hub_core::new_api`) and keyboard/mouse interfaces are never opened; unverified on a Mac. See
+> [HANDOFF.md](HANDOFF.md).
 
 The Puck exposes four controller slots as HID interfaces 2..5 and a vendor interface 6. A connected
 controller streams reports on its slot's interface (layout from SDL):

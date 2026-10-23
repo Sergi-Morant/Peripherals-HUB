@@ -19,6 +19,9 @@ const BATTERY_EVERY: Duration = Duration::from_secs(30);
 /// A receiver with no mouse behind it is probed again this often (the mouse may just be asleep).
 const REPROBE_EVERY: Duration = Duration::from_secs(10);
 
+/// Motor levels over time (see `hub_midi::rumble_states`); empty = no vibration.
+pub type RumbleStates = Vec<(u64, Vec<(Motor, u8)>)>;
+
 /// Sound to play on a device's speaker: interleaved 16-bit PCM.
 pub struct Audio {
     pub samples: Vec<i16>,
@@ -48,7 +51,7 @@ pub enum Cmd {
     StopPlay { id: String },
     /// Stream sound to the device's speaker. Blocks the device thread until it is over or stopped
     /// through [`Manager::stop_audio`].
-    PlayAudio { id: String, audio: Arc<Audio>, volume: u8 },
+    PlayAudio { id: String, audio: Arc<Audio>, volume: u8, rumble: Arc<RumbleStates> },
     Tone { id: String, voice: usize, hz: u16, ms: u16, volume: u8 },
     /// Read the onboard profiles and which one runs; answered with [`Update::Profiles`].
     LoadProfiles { id: String },
@@ -284,11 +287,14 @@ fn run(cmds: Receiver<Cmd>, updates: Sender<Update>, ctx: eframe::egui::Context,
                     }
                     Ok(())
                 }
-                Cmd::PlayAudio { audio, volume, .. } => {
+                Cmd::PlayAudio { audio, volume, rumble, .. } => {
                     stop_audio.store(false, Ordering::Relaxed);
-                    let r = d.play_audio(&audio.samples, audio.rate, audio.channels, volume, &|| {
-                        stop_audio.load(Ordering::Relaxed)
-                    });
+                    let options = hub_core::AudioOptions {
+                        volume,
+                        stop: &|| stop_audio.load(Ordering::Relaxed),
+                        rumble: &|ms| hub_midi::rumble_at(&rumble, ms),
+                    };
+                    let r = d.play_audio(&audio.samples, audio.rate, audio.channels, &options);
                     emit(Update::PlaybackEnded(id.clone()));
                     r
                 }

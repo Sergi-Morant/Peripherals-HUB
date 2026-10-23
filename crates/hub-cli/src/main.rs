@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use hub_core::{ButtonAction, Capability, Effect, EffectSetting, HidApi, Hub, Motor, Peripheral, Rgb};
+use hub_core::{AudioOptions, ButtonAction, Capability, Effect, EffectSetting, Hub, Motor, Peripheral, Rgb};
 
 #[derive(Parser)]
 #[command(name = "hub", version, about = "Control tool for the Peripherals HUB")]
@@ -44,6 +44,9 @@ enum Cmd {
         /// Play it as sound on the built-in speaker instead of as vibration.
         #[arg(long)]
         speaker: bool,
+        /// Speaker and vibration together (devices that have both, like the DualShock 4).
+        #[arg(long)]
+        both: bool,
     },
     /// Play a WAV file (or a test tone with `--tone HZ`) on the built-in speaker:
     /// `hub speaker ds4 song.wav --volume 80`.
@@ -188,7 +191,7 @@ fn find<'a>(devices: &'a mut [Box<dyn Peripheral>], q: &str) -> Result<&'a mut B
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let mut api = HidApi::new()?;
+    let mut api = hub_core::new_api()?;
     let mut devices = hub().scan(&mut api)?;
     match cli.cmd {
         Cmd::List => {
@@ -314,12 +317,21 @@ fn main() -> Result<()> {
             let off: Vec<_> = on.iter().map(|(m, _)| (*m, 0)).collect();
             d.rumble(&off)?;
         }
-        Cmd::Play { device, file, speaker } => {
+        Cmd::Play { device, file, speaker, both } => {
             let notes = hub_midi::parse(&std::fs::read(&file)?).map_err(|e| anyhow::anyhow!(e))?;
             let d = find(&mut devices, &device)?;
-            if speaker {
+            if speaker || both {
                 println!("{} notes, {} s", notes.len(), hub_midi::total_ms(&notes) / 1000);
-                d.play_audio(&hub_midi::render_pcm(&notes, 32_000), 32_000, 1, 80, &|| false)?;
+                let states = match d.capabilities().iter().find(|c| matches!(c, Capability::Rumble(_))) {
+                    Some(Capability::Rumble(m)) if both => hub_midi::rumble_states(&hub_midi::plan_rhythm(&notes, m)),
+                    _ => vec![],
+                };
+                let options = AudioOptions {
+                    volume: 80,
+                    stop: &|| false,
+                    rumble: &|ms| hub_midi::rumble_at(&states, ms),
+                };
+                d.play_audio(&hub_midi::render_pcm(&notes, 32_000), 32_000, 1, &options)?;
                 return Ok(());
             }
             let caps = d.capabilities();
@@ -373,7 +385,7 @@ fn main() -> Result<()> {
                 (None, None) => bail!("give a WAV file or --tone HZ"),
             };
             println!("{} s at {rate} Hz", samples.len() / channels.max(1) as usize / rate as usize);
-            d.play_audio(&samples, rate, channels, volume, &|| false)?;
+            d.play_audio(&samples, rate, channels, &AudioOptions::plain(volume))?;
         }
         Cmd::Tone { device, voice, hz, ms, volume } => {
             find(&mut devices, &device)?.tone(voice, hz, ms, volume)?;

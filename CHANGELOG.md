@@ -18,6 +18,10 @@ Everything marked "tested" below was tried on real hardware by the author.
   `--tone HZ` and `hub play ds4 song.mid --speaker`. Uses a built-in SBC encoder. Tested.
 * **Steam Controller:** a "Haptic tones" card to try a pitch on each actuator; MIDI playback through
   the haptics was already there. Tested.
+* **DualShock 4:** MIDI files now play through the speaker and the vibration motors together (the
+  music card has "Speaker" and "Vibration" switches; `hub play ds4 song.mid --both`).
+* **macOS:** devices are no longer opened exclusively, so the hub does not take a controller's
+  mouse/keyboard emulation away from the system (reported with the Steam Controller; unverified).
 * The example MIDI is now a public-domain tune (`examples/ode-to-joy.mid`) instead of a transcription
   of a copyrighted one, and the README explains how far the Linux udev rules reach.
 

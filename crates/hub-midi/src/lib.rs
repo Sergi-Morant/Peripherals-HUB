@@ -98,6 +98,31 @@ pub fn total_ms(notes: &[Note]) -> u64 {
 }
 
 /// Frequency of a MIDI key, folded by octaves into the range small haptic actuators reproduce.
+/// Motor levels at each moment of a rumble plan: the plan's events say "set these motors", so the
+/// levels of every motor are carried forward. Sorted by time.
+pub fn rumble_states(events: &[Event]) -> Vec<(u64, Vec<(Motor, u8)>)> {
+    let mut now: Vec<(Motor, u8)> = Vec::new();
+    let mut out = Vec::new();
+    for e in events {
+        if let Action::Rumble(levels) = &e.action {
+            for &(m, l) in levels {
+                match now.iter_mut().find(|(k, _)| *k == m) {
+                    Some(slot) => slot.1 = l,
+                    None => now.push((m, l)),
+                }
+            }
+            out.push((e.at_ms, now.clone()));
+        }
+    }
+    out
+}
+
+/// The levels in force `ms` after the start (all motors off before the first event).
+pub fn rumble_at(states: &[(u64, Vec<(Motor, u8)>)], ms: u64) -> Vec<(Motor, u8)> {
+    let i = states.partition_point(|(t, _)| *t <= ms);
+    if i == 0 { Vec::new() } else { states[i - 1].1.clone() }
+}
+
 /// Render the notes as mono 16-bit PCM at `rate` Hz with plain sine voices, for devices that have a
 /// speaker. Notes get a short attack and release so they do not click.
 pub fn render_pcm(notes: &[Note], rate: u32) -> Vec<i16> {
@@ -234,6 +259,20 @@ mod tests {
         let notes = parse(include_bytes!("../../../examples/ode-to-joy.mid")).unwrap();
         assert_eq!(notes.len(), 62);
         assert_eq!(notes[0].key, 64);
+    }
+
+    #[test]
+    fn rumble_levels_carry_forward() {
+        let ev = |at_ms, l: Vec<(Motor, u8)>| Event { at_ms, action: Action::Rumble(l) };
+        let states = rumble_states(&[
+            ev(100, vec![(Motor::Strong, 50)]),
+            ev(200, vec![(Motor::Weak, 70)]),
+            ev(300, vec![(Motor::Strong, 0)]),
+        ]);
+        assert!(rumble_at(&states, 50).is_empty());
+        assert_eq!(rumble_at(&states, 150), vec![(Motor::Strong, 50)]);
+        assert_eq!(rumble_at(&states, 250), vec![(Motor::Strong, 50), (Motor::Weak, 70)]);
+        assert_eq!(rumble_at(&states, 999), vec![(Motor::Strong, 0), (Motor::Weak, 70)]);
     }
 
     #[test]

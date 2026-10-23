@@ -5,6 +5,16 @@ pub use hidapi::HidApi;
 
 use std::sync::{Mutex, OnceLock};
 
+/// A new `HidApi`. On macOS hidapi opens devices exclusively by default, which takes them away from
+/// the system: a Steam Controller's mouse and keyboard emulation, for one, stops working while the
+/// hub has any of its interfaces open. The hub only talks to devices, so it shares them.
+pub fn new_api() -> Result<HidApi> {
+    let api = HidApi::new()?;
+    #[cfg(target_os = "macos")]
+    api.set_open_exclusive(false);
+    Ok(api)
+}
+
 /// The process-wide `HidApi`: hidapi allows only one instance, and the hub scanner and the
 /// keyboard worker both need it. Lock it only for the duration of a refresh/open.
 pub fn shared_api() -> Result<&'static Mutex<HidApi>> {
@@ -12,7 +22,7 @@ pub fn shared_api() -> Result<&'static Mutex<HidApi>> {
     if let Some(a) = API.get() {
         return Ok(a);
     }
-    let api = HidApi::new()?;
+    let api = new_api()?;
     Ok(API.get_or_init(|| Mutex::new(api)))
 }
 
@@ -344,6 +354,24 @@ pub struct Settings {
     pub host_mode: Option<bool>,
 }
 
+/// How [`Peripheral::play_audio`] should play.
+pub struct AudioOptions<'a> {
+    /// 0..=100
+    pub volume: u8,
+    /// Polled while playing; the playback ends early when it returns true.
+    pub stop: &'a dyn Fn() -> bool,
+    /// Motor levels wanted this many milliseconds after the start, shaken along with the sound by
+    /// devices that can do both (empty = no vibration).
+    pub rumble: &'a dyn Fn(u64) -> Vec<(Motor, u8)>,
+}
+
+impl AudioOptions<'_> {
+    /// Sound only, no stopping, no vibration.
+    pub fn plain(volume: u8) -> AudioOptions<'static> {
+        AudioOptions { volume, stop: &|| false, rumble: &|_| Vec::new() }
+    }
+}
+
 pub trait Peripheral: Send {
     fn info(&self) -> &Info;
     /// Called every couple of seconds so streaming devices can drain pending reports and keep
@@ -379,16 +407,8 @@ pub trait Peripheral: Send {
         Err(Error::Unsupported("tones"))
     }
     /// Play interleaved 16-bit PCM (`channels` 1 or 2, sample rate `rate`) on the built-in speaker
-    /// and return when it has been sent; `volume` is 0..=100. `stop` is polled while playing and
-    /// ends the playback early when it returns true.
-    fn play_audio(
-        &mut self,
-        _samples: &[i16],
-        _rate: u32,
-        _channels: u16,
-        _volume: u8,
-        _stop: &dyn Fn() -> bool,
-    ) -> Result<()> {
+    /// and return when it has been sent. See [`AudioOptions`].
+    fn play_audio(&mut self, _samples: &[i16], _rate: u32, _channels: u16, _options: &AudioOptions) -> Result<()> {
         Err(Error::Unsupported("speaker"))
     }
     /// Read the onboard profiles (read-only).

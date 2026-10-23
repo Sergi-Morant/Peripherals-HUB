@@ -107,7 +107,7 @@ impl Hub {
         if let Some(audio) = play {
             let volume = *self.volume.get(&d.info.id).unwrap_or(&60);
             self.playing.insert(d.info.id.clone());
-            self.manager.send(Cmd::PlayAudio { id: d.info.id.clone(), audio, volume });
+            self.manager.send(Cmd::PlayAudio { id: d.info.id.clone(), audio, volume, rumble: Default::default() });
         }
         if stop {
             self.manager.stop_audio();

@@ -131,7 +131,10 @@ impl Driver for SteamDriver {
     fn discover(&self, api: &HidApi) -> Vec<Box<dyn Peripheral>> {
         let mut slots: BTreeMap<String, (i32, Option<String>)> = BTreeMap::new();
         for d in api.device_list() {
-            if d.vendor_id() == VID && PUCK_PIDS.contains(&d.product_id()) && SLOT_INTERFACES.contains(&d.interface_number()) {
+            // Never open the Puck's keyboard and mouse interfaces (the "desktop mode" of the controller):
+            // opening them would take the cursor and keys away from the system.
+            let desktop = d.usage_page() == 0x0001 && matches!(d.usage(), 0x02 | 0x06);
+            if d.vendor_id() == VID && PUCK_PIDS.contains(&d.product_id()) && SLOT_INTERFACES.contains(&d.interface_number()) && !desktop {
                 slots.insert(d.path().to_string_lossy().into_owned(), (d.interface_number(), d.serial_number().map(String::from)));
             }
         }

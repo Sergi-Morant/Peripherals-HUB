@@ -36,6 +36,8 @@ pub struct Hub {
     midi: Option<(String, Vec<hub_midi::Note>)>,
     /// Sound loaded for the speaker card: display name and samples.
     audio: Option<(String, std::sync::Arc<crate::manager::Audio>)>,
+    /// Which outputs the music card uses per device: (speaker, vibration).
+    music_output: HashMap<String, (bool, bool)>,
     /// Speaker volume per device (0..=100).
     volume: HashMap<String, u8>,
     /// Test tone settings per device: actuator, pitch in Hz, strength.
@@ -69,6 +71,7 @@ impl Hub {
             rumble: HashMap::new(),
             midi: None,
             audio: None,
+            music_output: HashMap::new(),
             volume: HashMap::new(),
             tone: HashMap::new(),
             profile_data: HashMap::new(),

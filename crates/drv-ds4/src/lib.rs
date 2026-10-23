@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use hidapi::{HidApi, HidDevice};
 use hub_core::{
-    transport_of, Battery, Capability, Driver, Error, Info, Kind, Motor, Peripheral, Result, Rgb, Transport,
+    transport_of, AudioOptions, Battery, Capability, Driver, Error, Info, Kind, Motor, Peripheral, Result, Rgb, Transport,
 };
 
 const VID: u16 = 0x054C;
@@ -72,15 +72,15 @@ impl Driver for Ds4Driver {
 }
 
 /// Bluetooth output report `0x11` with the audio path enabled (`audio_volume` is 0..=100).
-fn audio_control_report(c: Rgb, audio_volume: u8, rumble: u8) -> Vec<u8> {
+fn audio_control_report(c: Rgb, audio_volume: u8, strong: u8, weak: u8) -> Vec<u8> {
     let mut r = vec![0u8; BT_LEN];
     r[0] = 0x11;
     r[1] = 0xC0;
     r[2] = 0x20; // audio control
     r[3] = 0xF3;
     r[4] = 0x04;
-    r[6] = rumble;
-    r[7] = rumble;
+    r[6] = weak;
+    r[7] = strong;
     r[8..11].copy_from_slice(&[c.0, c.1, c.2]);
     r[21..26].copy_from_slice(&[0x43, 0x43, 0x00, audio_volume, 0x85]);
     let crc = crc32(0xA2, &r[..BT_LEN - 4]);
@@ -112,6 +112,12 @@ fn audio_report(with_control: bool, control: &[u8], counter: u16, frames: &[u8])
     let crc = crc32(0xA2, &r[..n - 4]);
     r[n - 4..].copy_from_slice(&crc.to_le_bytes());
     r
+}
+
+/// `(strong, weak)` motor bytes for motor levels of 0..=100.
+fn motor_bytes(levels: &[(Motor, u8)]) -> (u8, u8) {
+    let get = |m: Motor| levels.iter().find(|(k, _)| *k == m).map_or(0, |(_, l)| (l.min(&100).to_owned() as u16 * 255 / 100) as u8);
+    (get(Motor::Strong), get(Motor::Weak))
 }
 
 /// Convert to 32 kHz stereo by linear interpolation.
@@ -222,7 +228,7 @@ impl Peripheral for Ds4 {
         self.send()
     }
 
-    fn play_audio(&mut self, samples: &[i16], rate: u32, channels: u16, volume: u8, stop: &dyn Fn() -> bool) -> Result<()> {
+    fn play_audio(&mut self, samples: &[i16], rate: u32, channels: u16, options: &AudioOptions) -> Result<()> {
         if self.info.transport != Transport::Bluetooth {
             return Err(Error::Unsupported("speaker (only over Bluetooth)"));
         }
@@ -233,22 +239,24 @@ impl Peripheral for Ds4 {
         // Whole SBC frames only; pad the tail with silence up to a pair of frames.
         let pair = sbc::FRAME_SAMPLES * 2 * 2;
         pcm.resize(pcm.len().div_ceil(pair) * pair, 0);
-        let volume = volume.min(100);
-        let control = audio_control_report(self.color, volume, 0);
-        self.hid.write(&audio_control_report(self.color, volume, 80))?; // the pad buzzes once to confirm
+        let volume = options.volume.min(100);
+        self.hid.write(&audio_control_report(self.color, volume, 80, 80))?; // the pad buzzes once to confirm
         std::thread::sleep(Duration::from_millis(200));
-        self.hid.write(&control)?;
+        self.hid.write(&audio_control_report(self.color, volume, 0, 0))?;
         std::thread::sleep(Duration::from_millis(50));
 
         let mut enc = sbc::Encoder::default();
         let start = Instant::now();
-        // Each report carries two SBC frames = 256 samples per channel = 8 ms of sound; stay about
-        // 96 ms ahead of real time so Bluetooth hiccups do not make it stutter.
+        // Each report carries two SBC frames = 256 samples per channel = 8 ms of sound, so one
+        // report every 8 ms, staying about 96 ms ahead of real time so Bluetooth hiccups do not make
+        // it stutter. The motor levels ride along in the control block, which is also sent every
+        // third report to keep the volume alive.
         let step = Duration::from_millis(8);
         let lead = Duration::from_millis(96);
         let mut counter = 0u16;
+        let mut motors = (0u8, 0u8);
         for (n, chunk) in pcm.chunks_exact(pair).enumerate() {
-            if stop() {
+            if (options.stop)() {
                 break;
             }
             let a = enc.encode(&chunk[..pair / 2]);
@@ -256,16 +264,22 @@ impl Peripheral for Ds4 {
             let mut frames = Vec::with_capacity(2 * sbc::FRAME_BYTES);
             frames.extend_from_slice(&a);
             frames.extend_from_slice(&b);
-            self.hid.write(&audio_report(n % 3 == 0, &control, counter, &frames))?;
+            let wanted = motor_bytes(&(options.rumble)(n as u64 * 8));
+            let changed = wanted != motors;
+            motors = wanted;
+            let control = audio_control_report(self.color, volume, motors.0, motors.1);
+            self.hid.write(&audio_report(n % 3 == 0 || changed, &control, counter, &frames))?;
             counter = counter.wrapping_add(2);
             if let Some(wait) = (step * (n as u32 + 1)).checked_sub(lead + start.elapsed()) {
                 std::thread::sleep(wait);
             }
         }
-        if !stop() {
+        if !(options.stop)() {
             std::thread::sleep(lead); // let what is already buffered on the pad play out
         }
         // Back to a plain output report: lightbar colour, no rumble, audio path off.
+        self.strong = 0;
+        self.weak = 0;
         self.send()
     }
 
@@ -304,9 +318,10 @@ mod tests {
 
     #[test]
     fn audio_reports_have_valid_crc() {
-        let control = audio_control_report(Rgb(0, 0, 64), 80, 0);
+        let control = audio_control_report(Rgb(0, 0, 64), 80, 10, 20);
         assert_eq!(control.len(), BT_LEN);
         assert_eq!(control[24], 80);
+        assert_eq!((control[6], control[7]), (20, 10)); // weak, strong
         let frames = vec![0u8; 2 * sbc::FRAME_BYTES];
         for (with_control, len) in [(false, 270), (true, 334)] {
             let r = audio_report(with_control, &control, 6, &frames);
@@ -314,6 +329,13 @@ mod tests {
             let crc = u32::from_le_bytes(r[len - 4..].try_into().unwrap());
             assert_eq!(crc, crc32(0xA2, &r[..len - 4]));
         }
+    }
+
+    #[test]
+    fn motor_levels_become_bytes() {
+        assert_eq!(motor_bytes(&[]), (0, 0));
+        assert_eq!(motor_bytes(&[(Motor::Strong, 100), (Motor::Weak, 50)]), (255, 127));
+        assert_eq!(motor_bytes(&[(Motor::TriggerLeft, 100)]), (0, 0));
     }
 
     #[test]

@@ -154,6 +154,9 @@ impl Hub {
         let tones = d.caps.iter().find_map(|c| if let Capability::Tones(n) = c { Some(*n as usize) } else { None });
         let motors = d.caps.iter().find_map(|c| if let Capability::Rumble(m) = c { Some(m.clone()) } else { None });
         let playing = self.playing.contains(&d.info.id);
+        let has_speaker = d.caps.contains(&Capability::Speaker);
+        // Pads with a speaker and motors can use either or both; the others only vibrate.
+        let (mut use_speaker, mut use_rumble) = *self.music_output.get(&d.info.id).unwrap_or(&(true, true));
         let mut action: Option<bool> = None; // Some(true) = play, Some(false) = stop
         card(ui, |ui| {
             card_header(
@@ -189,9 +192,16 @@ impl Hub {
                     );
                 }
             });
+            if has_speaker {
+                ui.horizontal(|ui| {
+                    ui.label("Play through");
+                    ui.checkbox(&mut use_speaker, "Speaker");
+                    ui.checkbox(&mut use_rumble, "Vibration");
+                });
+            }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                let ready = self.midi.is_some();
+                let ready = self.midi.is_some() && (!has_speaker || use_speaker || use_rumble);
                 if playing {
                     if ui.button(format!("{}  Stop", icons::PAUSE)).clicked() {
                         action = Some(false);
@@ -201,18 +211,44 @@ impl Hub {
                 }
             });
         });
+        if has_speaker {
+            self.music_output.insert(d.info.id.clone(), (use_speaker, use_rumble));
+        }
         match action {
             Some(true) => {
                 let Some((_, notes)) = &self.midi else { return };
-                let events = match (tones, motors) {
-                    (Some(voices), _) => hub_midi::plan_tones(notes, voices),
-                    (None, Some(m)) => hub_midi::plan_rhythm(notes, &m),
-                    _ => vec![],
-                };
                 self.playing.insert(d.info.id.clone());
-                self.manager.send(Cmd::Play { id: d.info.id.clone(), events });
+                if has_speaker && use_speaker {
+                    // Sound from the speaker, with the vibration rhythm riding along if wanted.
+                    let states = match (&motors, use_rumble) {
+                        (Some(m), true) => hub_midi::rumble_states(&hub_midi::plan_rhythm(notes, m)),
+                        _ => vec![],
+                    };
+                    let audio = crate::manager::Audio {
+                        samples: hub_midi::render_pcm(notes, 32_000),
+                        rate: 32_000,
+                        channels: 1,
+                    };
+                    let volume = *self.volume.get(&d.info.id).unwrap_or(&60);
+                    self.manager.send(Cmd::PlayAudio {
+                        id: d.info.id.clone(),
+                        audio: std::sync::Arc::new(audio),
+                        volume,
+                        rumble: std::sync::Arc::new(states),
+                    });
+                } else {
+                    let events = match (tones, motors) {
+                        (Some(voices), _) => hub_midi::plan_tones(notes, voices),
+                        (None, Some(m)) => hub_midi::plan_rhythm(notes, &m),
+                        _ => vec![],
+                    };
+                    self.manager.send(Cmd::Play { id: d.info.id.clone(), events });
+                }
             }
-            Some(false) => self.manager.send(Cmd::StopPlay { id: d.info.id.clone() }),
+            Some(false) => {
+                self.manager.stop_audio();
+                self.manager.send(Cmd::StopPlay { id: d.info.id.clone() });
+            }
             None => {}
         }
     }
