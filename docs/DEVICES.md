@@ -106,8 +106,17 @@ the two disagree in places:
 status below. **Vibration while the speaker plays makes the sound crackle** (tried at full and at half
 strength: no difference), so the GUI leaves vibration off by default.
 
-Not done: the `0x17` four-frame report, stopping playback early, a GUI control, and the
-headphone-jack path.
+**macOS:** a Bluetooth HID write blocks for about 30 ms there (two per connection interval, measured
+with `0x14` reports), so one 8 ms report each took twice as long as the sound it carried and the
+speaker starved (a 31 s song needed over 60 s and sounded broken up). On macOS the driver therefore
+sends `0x17` reports (462 bytes: `17 40 A0`, counter, `02`, four SBC frames = 16 ms, zero padding,
+CRC32 at the end), which makes writes fast (median 0.2 ms) and playback run in real time. The
+control block (`0x15`) is sent only at the start and when the motor levels change: refreshing it
+every 48 ms sounded worse than every second, and only at the start sounded best. The sound is
+clearly better than with `0x14` but still not as clean as on Linux, and two runs with the same
+settings did not always sound the same. Linux keeps `0x14`/`0x15` (the `0x17` path is untested there).
+
+Not done: stopping playback early, a GUI control, and the headphone-jack path.
 
 ## Xbox One / Series controller (Bluetooth, `045e:0b13` tested)
 

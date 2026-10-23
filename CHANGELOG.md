@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+* **macOS: DualShock 4 speaker plays in real time.** Bluetooth writes block for about 30 ms on
+  macOS, so the 8 ms audio reports starved the speaker. The driver now sends four-frame `0x17`
+  reports there and only sends the control block at the start. Better, but not yet as clean as on
+  Linux (details in `docs/DEVICES.md`).
+
 ## 0.1.1 — 2026-10-23
 
 Still **early and only tested on Linux** (the Windows and macOS builds have not been run yet).

@@ -39,6 +39,16 @@ Read `README.md`, `docs/ARCHITECTURE.md` (crates, traits, how to add a driver), 
    may want every report padded to the pad's full output report length, 547 bytes, see
    `docs/DEVICES.md`).
 
+## Findings on macOS (2026-10-23, Steam Controller Puck + DualShock 4 v2 over Bluetooth)
+
+* `hub list`, `hub battery`, lightbar colour and the Steam tone work. The Puck's interfaces report
+  `interface_number()` 2..=5 correctly (it is not -1), and each exposes usages `0001/0002`,
+  `0001/0001`, `0001/0006` and `ff00/0001`: that is the controller's own keyboard/mouse emulation
+  ("lizard mode"), which is what macOS sees as a keyboard. The hub does not list it as one. The
+  tone did not move the cursor; the GUI and the trackpad-takeover report are still untested.
+* DS4 speaker: the stutter was throughput, not report padding (see "macOS" in `docs/DEVICES.md`).
+  Fixed in part with `0x17` reports; still not as clean as on Linux. `--both` is untested on macOS.
+
 ## Changes since 0.1.0 (all local to this branch, none released)
 
 * DS4 speaker over Bluetooth (`crates/drv-ds4/src/sbc.rs` is a small SBC encoder), speaker card and

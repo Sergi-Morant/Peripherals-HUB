@@ -88,16 +88,22 @@ fn audio_control_report(c: Rgb, audio_volume: u8, strong: u8, weak: u8) -> Vec<u
     r
 }
 
-/// Report `0x14` (two SBC frames) or `0x15` (the same, with the control block in front, which
-/// keeps the volume alive), `counter` counts SBC frames.
+/// Report `0x14` (two SBC frames), `0x17` (four, 462 bytes) or `0x15` (two, with the control block
+/// in front, which keeps the volume alive); `counter` counts SBC frames.
 fn audio_report(with_control: bool, control: &[u8], counter: u16, frames: &[u8]) -> Vec<u8> {
-    debug_assert_eq!(frames.len(), 2 * sbc::FRAME_BYTES);
+    let quad = frames.len() == 4 * sbc::FRAME_BYTES;
+    debug_assert!(quad && !with_control || frames.len() == 2 * sbc::FRAME_BYTES);
     let (mut r, at) = if with_control {
         let mut r = vec![0u8; 334];
         r[0] = 0x15;
         r[1] = 0xC0;
         r[3..78].copy_from_slice(&control[3..78]);
         (r, 78)
+    } else if quad {
+        let mut r = vec![0u8; 462];
+        r[0] = 0x17;
+        r[1] = 0x40;
+        (r, 3)
     } else {
         let mut r = vec![0u8; 270];
         r[0] = 0x14;
@@ -252,11 +258,17 @@ impl Peripheral for Ds4 {
         // report every 8 ms, staying about 96 ms ahead of real time so Bluetooth hiccups do not make
         // it stutter. The motor levels ride along in the control block, which is also sent every
         // third report to keep the volume alive. While paused, silence keeps the stream going.
-        let step = Duration::from_millis(8);
         let lead = Duration::from_millis(96);
         let chunks = pcm.len() / pair;
         let silence = vec![0i16; pair];
-        let (mut n, mut sent) = (0usize, 0u32);
+        // On macOS a Bluetooth HID write blocks for about 30 ms (two per connection interval), too
+        // slow for one 8 ms report each, so there the audio goes in 0x17 reports of four frames
+        // (16 ms) and the control block is only sent at the start and when the motors change (sending it
+        // more often sounded worse).
+        let quad = cfg!(target_os = "macos");
+        let control_every_ms = if quad { u64::MAX } else { 24 };
+        let (mut n, mut sent_ms, mut control_ms) = (0usize, 0u64, 0u64);
+        let mut first = true;
         let mut counter = 0u16;
         let mut motors = (0u8, 0u8);
         while n < chunks {
@@ -268,24 +280,30 @@ impl Peripheral for Ds4 {
                 enc = sbc::Encoder::default();
             }
             let paused = control.paused();
-            let chunk = if paused { &silence[..] } else { &pcm[n * pair..(n + 1) * pair] };
-            let a = enc.encode(&chunk[..pair / 2]);
-            let b = enc.encode(&chunk[pair / 2..]);
-            let mut frames = Vec::with_capacity(2 * sbc::FRAME_BYTES);
-            frames.extend_from_slice(&a);
-            frames.extend_from_slice(&b);
             let wanted = if paused { (0, 0) } else { motor_bytes(&(options.rumble)(n as u64 * 8)) };
             let changed = wanted != motors;
             motors = wanted;
+            let with_control = first || changed || sent_ms >= control_ms.saturating_add(control_every_ms);
+            first = false;
+            let take = if quad && !with_control && (paused || n + 2 <= chunks) { 2 } else { 1 };
+            let mut frames = Vec::with_capacity(take * 2 * sbc::FRAME_BYTES);
+            for i in 0..take {
+                let chunk = if paused { &silence[..] } else { &pcm[(n + i) * pair..(n + i + 1) * pair] };
+                frames.extend_from_slice(&enc.encode(&chunk[..pair / 2]));
+                frames.extend_from_slice(&enc.encode(&chunk[pair / 2..]));
+            }
             let control_block = audio_control_report(self.color, volume, motors.0, motors.1);
-            self.hid.write(&audio_report(sent % 3 == 0 || changed, &control_block, counter, &frames))?;
-            counter = counter.wrapping_add(2);
+            self.hid.write(&audio_report(with_control, &control_block, counter, &frames))?;
+            if with_control {
+                control_ms = sent_ms;
+            }
+            counter = counter.wrapping_add(2 * take as u16);
             if !paused {
-                n += 1;
+                n += take;
             }
             control.set_position(n as u64 * 8);
-            sent += 1;
-            if let Some(wait) = (step * sent).checked_sub(lead + start.elapsed()) {
+            sent_ms += 8 * take as u64;
+            if let Some(wait) = Duration::from_millis(sent_ms).checked_sub(lead + start.elapsed()) {
                 std::thread::sleep(wait);
             }
         }
