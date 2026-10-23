@@ -20,3 +20,4 @@ drv-steam.workspace = true
 drv-xbox.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+hound.workspace = true

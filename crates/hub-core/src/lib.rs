@@ -188,6 +188,8 @@ pub enum Capability {
     Rumble(Vec<Motor>),
     /// Actuators that can play a pitch (this many voices), as the Steam Controller's haptics can.
     Tones(u8),
+    /// A built-in speaker that plays audio streamed to it.
+    Speaker,
     /// The device can run its own stored profile (onboard) or take settings from the host.
     HostMode,
 }
@@ -234,6 +236,11 @@ pub trait Peripheral: Send {
     /// by itself when the duration is over.
     fn tone(&mut self, _voice: usize, _hz: u16, _duration_ms: u16, _volume: u8) -> Result<()> {
         Err(Error::Unsupported("tones"))
+    }
+    /// Play interleaved 16-bit PCM (`channels` 1 or 2, sample rate `rate`) on the built-in speaker
+    /// and return when it has been sent; `volume` is 0..=100.
+    fn play_audio(&mut self, _samples: &[i16], _rate: u32, _channels: u16, _volume: u8) -> Result<()> {
+        Err(Error::Unsupported("speaker"))
     }
     fn set_dpi(&mut self, _dpi: u16) -> Result<()> {
         Err(Error::Unsupported("dpi"))

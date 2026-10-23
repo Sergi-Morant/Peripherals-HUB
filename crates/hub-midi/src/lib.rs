@@ -98,6 +98,27 @@ pub fn total_ms(notes: &[Note]) -> u64 {
 }
 
 /// Frequency of a MIDI key, folded by octaves into the range small haptic actuators reproduce.
+/// Render the notes as mono 16-bit PCM at `rate` Hz with plain sine voices, for devices that have a
+/// speaker. Notes get a short attack and release so they do not click.
+pub fn render_pcm(notes: &[Note], rate: u32) -> Vec<i16> {
+    let end_ms = notes.iter().map(|n| n.start_ms + n.duration_ms).max().unwrap_or(0) + 300;
+    let mut mix = vec![0f32; (end_ms * rate as u64 / 1000) as usize];
+    for n in notes {
+        let hz = 440.0 * 2f32.powf((n.key as f32 - 69.0) / 12.0);
+        let first = (n.start_ms * rate as u64 / 1000) as usize;
+        let len = ((n.duration_ms * rate as u64 / 1000) as usize).max(1);
+        let ramp = (rate as usize / 100).min(len / 2).max(1); // 10 ms
+        let gain = n.velocity as f32 / 127.0 * 0.5;
+        for i in 0..len {
+            let env = (i.min(len - i) as f32 / ramp as f32).min(1.0);
+            let t = i as f32 / rate as f32;
+            mix[first + i] += (2.0 * std::f32::consts::PI * hz * t).sin() * gain * env;
+        }
+    }
+    let peak = mix.iter().fold(0f32, |m, v| m.max(v.abs())).max(1.0);
+    mix.iter().map(|v| (v / peak * 28_000.0) as i16).collect()
+}
+
 pub fn haptic_hz(key: u8) -> u16 {
     let mut hz = 440.0 * 2f64.powf((key as f64 - 69.0) / 12.0);
     while hz > 600.0 {
@@ -213,6 +234,13 @@ mod tests {
         let notes = parse(include_bytes!("../../../examples/ode-to-joy.mid")).unwrap();
         assert_eq!(notes.len(), 62);
         assert_eq!(notes[0].key, 64);
+    }
+
+    #[test]
+    fn renders_a_note_as_a_wave() {
+        let pcm = render_pcm(&[Note { start_ms: 0, duration_ms: 100, key: 69, velocity: 100 }], 8000);
+        assert!(pcm.len() >= 800);
+        assert!(pcm.iter().any(|&v| v > 5000) && pcm.iter().any(|&v| v < -5000));
     }
 
     #[test]

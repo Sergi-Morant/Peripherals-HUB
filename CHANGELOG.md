@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+* **DualShock 4 speaker** (Bluetooth): `hub speaker ds4 file.wav` / `--tone HZ` and
+  `hub play ds4 song.mid --speaker`, with a built-in SBC encoder. Test tone verified on hardware.
+* Example MIDI replaced by a public-domain tune (`examples/ode-to-joy.mid`); the README explains how
+  far the Linux udev rules reach.
+
 ## 0.1.0 — 2026-10-22
 
 First version of the Peripherals HUB: one app for several devices, built on top of

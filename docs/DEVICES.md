@@ -47,7 +47,31 @@ to full input reports. Rumble and lightbar are in the same report, so the driver
 | Lightbar colour (Bluetooth) | verified (confirmed by the user) |
 | Battery (Bluetooth, input report `0x11` byte 32) | verified (matches the kernel's reading) |
 | Rumble (strong/weak) | sent; the user answered "so far so good" after trying it, not confirmed in detail |
+| Speaker (Bluetooth only), `hub speaker ds4 --tone 1500` | verified: a test tone was heard; music through it is unconfirmed (see below) |
 | USB connection, Sony USB wireless adapter (`0x0BA0`, shown as 2.4 GHz) | untested |
+
+### Speaker over Bluetooth
+
+The pad's speaker is fed SBC audio inside HID output reports (not through A2DP). Worked out from
+community write-ups ([Habr](https://habr.com/en/articles/302356/),
+[ds4-speaker-test](https://github.com/Clien077/ds4-speaker-test)) and then tried on the pad, because
+the two disagree in places:
+
+* A `0x11` control report with `r[2]=0x20`, `r[3]=0xF3`, `r[4]=0x04` and `43 43 00 <volume 0..100> 85`
+  at bytes 21..25 turns the audio path on. The pad buzzes once when it is sent with rumble set.
+* Audio goes in `0x14` (270 bytes: `14 40 A0`, a 2-byte LE frame counter, `02` = built-in speaker
+  (`24` = headphone jack), 224 bytes of SBC, CRC32) or `0x15` (334 bytes: `15 C0 A0`, 75 bytes of
+  the control block, counter, `02`, 224 bytes of SBC, CRC32). Each carries two SBC frames = 8 ms of
+  sound, so one report every 8 ms, staying about 96 ms ahead. The driver sends a `0x15` every third
+  report. **`0x14` alone only produced a faint hiss; with `0x15` mixed in the sound was clear.**
+* SBC: 32 kHz, dual channel, 8 subbands, 16 blocks, loudness, bitpool 25 = 112-byte frames. The
+  encoder is in `crates/drv-ds4/src/sbc.rs` and was checked by decoding its output with ffmpeg
+  (about 60 dB SNR on test tones) and against libsbc's `sbcenc` (identical headers, scale factors
+  and bit allocation).
+* Over USB the speaker is a normal USB audio device, so this path is Bluetooth only.
+
+Not done: the `0x17` four-frame report, stopping playback early, a GUI control, and the
+headphone-jack path.
 
 ## Xbox One / Series controller (Bluetooth, `045e:0b13` tested)
 

@@ -1,9 +1,14 @@
-//! Sony DualShock 4 over USB or Bluetooth: lightbar colour and battery.
+//! Sony DualShock 4 over USB or Bluetooth: lightbar colour, rumble, battery and (Bluetooth only)
+//! the built-in speaker.
 //!
 //! USB: output report `0x05` (32 bytes). Bluetooth: output report `0x11` (78 bytes) whose last
 //! four bytes are a CRC32 over `0xA2` followed by the first 74 bytes; without it the pad ignores
 //! the report. Reading feature report `0x02` once switches a Bluetooth pad from the simple input
 //! report to the full `0x11` one, which carries the battery status.
+
+pub mod sbc;
+
+use std::time::{Duration, Instant};
 
 use hidapi::{HidApi, HidDevice};
 use hub_core::{
@@ -66,6 +71,66 @@ impl Driver for Ds4Driver {
     }
 }
 
+/// Bluetooth output report `0x11` with the audio path enabled (`audio_volume` is 0..=100).
+fn audio_control_report(c: Rgb, audio_volume: u8, rumble: u8) -> Vec<u8> {
+    let mut r = vec![0u8; BT_LEN];
+    r[0] = 0x11;
+    r[1] = 0xC0;
+    r[2] = 0x20; // audio control
+    r[3] = 0xF3;
+    r[4] = 0x04;
+    r[6] = rumble;
+    r[7] = rumble;
+    r[8..11].copy_from_slice(&[c.0, c.1, c.2]);
+    r[21..26].copy_from_slice(&[0x43, 0x43, 0x00, audio_volume, 0x85]);
+    let crc = crc32(0xA2, &r[..BT_LEN - 4]);
+    r[BT_LEN - 4..].copy_from_slice(&crc.to_le_bytes());
+    r
+}
+
+/// Report `0x14` (two SBC frames) or `0x15` (the same, with the control block in front, which
+/// keeps the volume alive), `counter` counts SBC frames.
+fn audio_report(with_control: bool, control: &[u8], counter: u16, frames: &[u8]) -> Vec<u8> {
+    debug_assert_eq!(frames.len(), 2 * sbc::FRAME_BYTES);
+    let (mut r, at) = if with_control {
+        let mut r = vec![0u8; 334];
+        r[0] = 0x15;
+        r[1] = 0xC0;
+        r[3..78].copy_from_slice(&control[3..78]);
+        (r, 78)
+    } else {
+        let mut r = vec![0u8; 270];
+        r[0] = 0x14;
+        r[1] = 0x40;
+        (r, 3)
+    };
+    r[2] = 0xA0;
+    r[at..at + 2].copy_from_slice(&counter.to_le_bytes());
+    r[at + 2] = 0x02; // built-in speaker (0x24 would be the headphone jack)
+    r[at + 3..at + 3 + frames.len()].copy_from_slice(frames);
+    let n = r.len();
+    let crc = crc32(0xA2, &r[..n - 4]);
+    r[n - 4..].copy_from_slice(&crc.to_le_bytes());
+    r
+}
+
+/// Convert to 32 kHz stereo by linear interpolation.
+fn to_32k_stereo(samples: &[i16], rate: u32, channels: u16) -> Vec<i16> {
+    let ch = channels.max(1) as usize;
+    let frames = samples.len() / ch;
+    let out_frames = (frames as u64 * 32_000 / rate.max(1) as u64) as usize;
+    let at = |f: usize, c: usize| samples[f.min(frames - 1) * ch + c.min(ch - 1)] as f64;
+    let mut out = Vec::with_capacity(out_frames * 2);
+    for i in 0..out_frames {
+        let pos = i as f64 * rate as f64 / 32_000.0;
+        let (a, frac) = (pos as usize, pos.fract());
+        for c in 0..2 {
+            out.push((at(a, c) * (1.0 - frac) + at(a + 1, c) * frac).round() as i16);
+        }
+    }
+    out
+}
+
 /// CRC32 (reflected, poly 0xEDB88320) as used by the pad's Bluetooth reports.
 fn crc32(seed_byte: u8, data: &[u8]) -> u32 {
     let mut crc = !0u32;
@@ -123,11 +188,15 @@ impl Peripheral for Ds4 {
     }
 
     fn capabilities(&self) -> Vec<Capability> {
-        vec![
+        let mut caps = vec![
             Capability::Battery,
             Capability::Rgb { zones: vec!["Lightbar".into()] },
             Capability::Rumble(vec![Motor::Strong, Motor::Weak]),
-        ]
+        ];
+        if self.info.transport == Transport::Bluetooth {
+            caps.push(Capability::Speaker);
+        }
+        caps
     }
 
     fn battery(&mut self) -> Result<Option<Battery>> {
@@ -150,6 +219,48 @@ impl Peripheral for Ds4 {
             return Err(Error::Unsupported("zone"));
         }
         self.color = color;
+        self.send()
+    }
+
+    fn play_audio(&mut self, samples: &[i16], rate: u32, channels: u16, volume: u8) -> Result<()> {
+        if self.info.transport != Transport::Bluetooth {
+            return Err(Error::Unsupported("speaker (only over Bluetooth)"));
+        }
+        if samples.is_empty() {
+            return Ok(());
+        }
+        let mut pcm = to_32k_stereo(samples, rate, channels);
+        // Whole SBC frames only; pad the tail with silence up to a pair of frames.
+        let pair = sbc::FRAME_SAMPLES * 2 * 2;
+        pcm.resize(pcm.len().div_ceil(pair) * pair, 0);
+        let volume = volume.min(100);
+        let control = audio_control_report(self.color, volume, 0);
+        self.hid.write(&audio_control_report(self.color, volume, 80))?; // the pad buzzes once to confirm
+        std::thread::sleep(Duration::from_millis(200));
+        self.hid.write(&control)?;
+        std::thread::sleep(Duration::from_millis(50));
+
+        let mut enc = sbc::Encoder::default();
+        let start = Instant::now();
+        // Each report carries two SBC frames = 256 samples per channel = 8 ms of sound; stay about
+        // 96 ms ahead of real time so Bluetooth hiccups do not make it stutter.
+        let step = Duration::from_millis(8);
+        let lead = Duration::from_millis(96);
+        let mut counter = 0u16;
+        for (n, chunk) in pcm.chunks_exact(pair).enumerate() {
+            let a = enc.encode(&chunk[..pair / 2]);
+            let b = enc.encode(&chunk[pair / 2..]);
+            let mut frames = Vec::with_capacity(2 * sbc::FRAME_BYTES);
+            frames.extend_from_slice(&a);
+            frames.extend_from_slice(&b);
+            self.hid.write(&audio_report(n % 3 == 0, &control, counter, &frames))?;
+            counter = counter.wrapping_add(2);
+            if let Some(wait) = (step * (n as u32 + 1)).checked_sub(lead + start.elapsed()) {
+                std::thread::sleep(wait);
+            }
+        }
+        std::thread::sleep(lead);
+        // Back to a plain output report: lightbar colour, no rumble, audio path off.
         self.send()
     }
 
@@ -184,6 +295,27 @@ mod tests {
         assert_eq!((r[6], r[7]), (20, 10)); // weak/right, strong/left
         let crc = u32::from_le_bytes(r[BT_LEN - 4..].try_into().unwrap());
         assert_eq!(crc, crc32(0xA2, &r[..BT_LEN - 4]));
+    }
+
+    #[test]
+    fn audio_reports_have_valid_crc() {
+        let control = audio_control_report(Rgb(0, 0, 64), 80, 0);
+        assert_eq!(control.len(), BT_LEN);
+        assert_eq!(control[24], 80);
+        let frames = vec![0u8; 2 * sbc::FRAME_BYTES];
+        for (with_control, len) in [(false, 270), (true, 334)] {
+            let r = audio_report(with_control, &control, 6, &frames);
+            assert_eq!(r.len(), len);
+            let crc = u32::from_le_bytes(r[len - 4..].try_into().unwrap());
+            assert_eq!(crc, crc32(0xA2, &r[..len - 4]));
+        }
+    }
+
+    #[test]
+    fn resamples_mono_to_32k_stereo() {
+        let out = to_32k_stereo(&[100; 160], 16_000, 1);
+        assert_eq!(out.len(), 320 * 2);
+        assert!(out.iter().all(|&v| v == 100));
     }
 
     #[test]

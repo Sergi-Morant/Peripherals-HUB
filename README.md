@@ -22,7 +22,7 @@ Royal Kludge RK S85 keyboard, whose code is embedded here unchanged.
 | Device | Connection | Battery | Lighting | Other |
 |---|---|---|---|---|
 | Logitech G502 X Plus | 2.4 GHz (Lightspeed receiver) | verified | effects: static, breathe, colour cycle, off | DPI, polling rate, onboard/host switch (verified) |
-| Sony DualShock 4 | Bluetooth | verified | lightbar colour (verified) | rumble |
+| Sony DualShock 4 | Bluetooth | verified | lightbar colour (verified) | rumble, built-in speaker (test tone verified) |
 | Xbox Series controller | Bluetooth | verified (via the OS Bluetooth stack, Linux only) | – | rumble incl. triggers |
 | Steam Controller | 2.4 GHz (Steam Controller Puck) | verified | – | haptic tones (verified), MIDI playback |
 | RK S85 keyboard | USB cable | – | everything open-s85 does | key mapping, screen, profiles |
@@ -100,6 +100,8 @@ hub mode g502 host|onboard|show
 hub rumble xbox --strong 60 --right 40 --ms 600
 hub tone steam --voice 0 --hz 220
 hub play steam examples/ode-to-joy.mid
+hub play ds4 examples/ode-to-joy.mid --speaker   # as sound on the DualShock 4 speaker
+hub speaker ds4 song.wav --volume 80         # or --tone 1500
 hub raw | hub probe | hub steam | hub sniff 045e:0b13   # development helpers
 ```
 

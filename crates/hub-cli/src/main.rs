@@ -38,7 +38,23 @@ enum Cmd {
         ms: u64,
     },
     /// Play a MIDI file through a device: `hub play steam examples/ode-to-joy.mid`.
-    Play { device: String, file: std::path::PathBuf },
+    Play {
+        device: String,
+        file: std::path::PathBuf,
+        /// Play it as sound on the built-in speaker instead of as vibration.
+        #[arg(long)]
+        speaker: bool,
+    },
+    /// Play a WAV file (or a test tone with `--tone HZ`) on the built-in speaker:
+    /// `hub speaker ds4 song.wav --volume 80`.
+    Speaker {
+        device: String,
+        file: Option<std::path::PathBuf>,
+        #[arg(long)]
+        tone: Option<u32>,
+        #[arg(long, default_value_t = 60)]
+        volume: u8,
+    },
     /// Play a tone on a voice (Steam Controller haptics): `hub tone steam --voice 0 --hz 220`.
     Tone {
         device: String,
@@ -144,6 +160,7 @@ fn main() -> Result<()> {
                         Capability::ReportRate(l) => println!("    report rate: {l:?} Hz"),
                         Capability::HostMode => println!("    onboard/host mode"),
                         Capability::Tones(n) => println!("    tones: {n} voices"),
+                    Capability::Speaker => println!("    speaker"),
                         Capability::Rumble(m) => println!("    rumble: {}", m.iter().map(|m| m.label()).collect::<Vec<_>>().join(", ")),
                     }
                 }
@@ -240,9 +257,14 @@ fn main() -> Result<()> {
             let off: Vec<_> = on.iter().map(|(m, _)| (*m, 0)).collect();
             d.rumble(&off)?;
         }
-        Cmd::Play { device, file } => {
+        Cmd::Play { device, file, speaker } => {
             let notes = hub_midi::parse(&std::fs::read(&file)?).map_err(|e| anyhow::anyhow!(e))?;
             let d = find(&mut devices, &device)?;
+            if speaker {
+                println!("{} notes, {} s", notes.len(), hub_midi::total_ms(&notes) / 1000);
+                d.play_audio(&hub_midi::render_pcm(&notes, 32_000), 32_000, 1, 80)?;
+                return Ok(());
+            }
             let caps = d.capabilities();
             let events = if let Some(Capability::Tones(n)) = caps.iter().find(|c| matches!(c, Capability::Tones(_))) {
                 hub_midi::plan_tones(&notes, *n as usize)
@@ -265,6 +287,36 @@ fn main() -> Result<()> {
             std::thread::sleep(std::time::Duration::from_millis(600));
             let off: Vec<_> = [Motor::Strong, Motor::Weak, Motor::TriggerLeft, Motor::TriggerRight].map(|m| (m, 0)).to_vec();
             let _ = d.rumble(&off);
+        }
+        Cmd::Speaker { device, file, tone, volume } => {
+            let d = find(&mut devices, &device)?;
+            let (samples, rate, channels) = match (file, tone) {
+                (_, Some(hz)) => {
+                    let pcm = (0..32_000u32 * 2)
+                        .map(|i| (20_000.0 * (std::f32::consts::TAU * hz as f32 * i as f32 / 32_000.0).sin()) as i16)
+                        .collect();
+                    (pcm, 32_000, 1)
+                }
+                (Some(f), None) => {
+                    let mut r = hound::WavReader::open(&f)?;
+                    let spec = r.spec();
+                    let samples: Vec<i16> = match (spec.sample_format, spec.bits_per_sample) {
+                        (hound::SampleFormat::Int, 16) => r.samples::<i16>().collect::<Result<_, _>>()?,
+                        (hound::SampleFormat::Int, bits) if bits <= 32 => {
+                            let shift = bits - 16;
+                            r.samples::<i32>().map(|s| s.map(|v| (v >> shift) as i16)).collect::<Result<_, _>>()?
+                        }
+                        (hound::SampleFormat::Float, _) => {
+                            r.samples::<f32>().map(|s| s.map(|v| (v * 32767.0) as i16)).collect::<Result<_, _>>()?
+                        }
+                        _ => bail!("unsupported WAV format"),
+                    };
+                    (samples, spec.sample_rate, spec.channels)
+                }
+                (None, None) => bail!("give a WAV file or --tone HZ"),
+            };
+            println!("{} s at {rate} Hz", samples.len() / channels.max(1) as usize / rate as usize);
+            d.play_audio(&samples, rate, channels, volume)?;
         }
         Cmd::Tone { device, voice, hz, ms, volume } => {
             find(&mut devices, &device)?.tone(voice, hz, ms, volume)?;
