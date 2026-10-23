@@ -319,7 +319,7 @@ fn main() -> Result<()> {
             let d = find(&mut devices, &device)?;
             if speaker {
                 println!("{} notes, {} s", notes.len(), hub_midi::total_ms(&notes) / 1000);
-                d.play_audio(&hub_midi::render_pcm(&notes, 32_000), 32_000, 1, 80)?;
+                d.play_audio(&hub_midi::render_pcm(&notes, 32_000), 32_000, 1, 80, &|| false)?;
                 return Ok(());
             }
             let caps = d.capabilities();
@@ -373,7 +373,7 @@ fn main() -> Result<()> {
                 (None, None) => bail!("give a WAV file or --tone HZ"),
             };
             println!("{} s at {rate} Hz", samples.len() / channels.max(1) as usize / rate as usize);
-            d.play_audio(&samples, rate, channels, volume)?;
+            d.play_audio(&samples, rate, channels, volume, &|| false)?;
         }
         Cmd::Tone { device, voice, hz, ms, volume } => {
             find(&mut devices, &device)?.tone(voice, hz, ms, volume)?;

@@ -231,13 +231,60 @@ pub fn mouse_button_name(mask: u16) -> String {
     }
 }
 
+/// Name of a USB HID keyboard usage (letters, digits, F-keys, navigation keys), if it is one of those.
+pub fn key_name(usage: u8) -> Option<String> {
+    Some(match usage {
+        0x04..=0x1D => ((b'A' + (usage - 0x04)) as char).to_string(),
+        0x1E..=0x26 => ((b'1' + (usage - 0x1E)) as char).to_string(),
+        0x27 => "0".into(),
+        0x28 => "Enter".into(),
+        0x29 => "Esc".into(),
+        0x2A => "Backspace".into(),
+        0x2B => "Tab".into(),
+        0x2C => "Space".into(),
+        0x3A..=0x45 => format!("F{}", usage - 0x3A + 1),
+        0x49 => "Insert".into(),
+        0x4A => "Home".into(),
+        0x4B => "Page up".into(),
+        0x4C => "Delete".into(),
+        0x4D => "End".into(),
+        0x4E => "Page down".into(),
+        0x4F => "Right".into(),
+        0x50 => "Left".into(),
+        0x51 => "Down".into(),
+        0x52 => "Up".into(),
+        _ => return None,
+    })
+}
+
+/// Name of a USB HID consumer (media) usage, if known.
+pub fn media_key_name(code: u16) -> Option<&'static str> {
+    Some(match code {
+        0x00CD => "play / pause",
+        0x00B5 => "next track",
+        0x00B6 => "previous track",
+        0x00B7 => "stop",
+        0x00E2 => "mute",
+        0x00E9 => "volume up",
+        0x00EA => "volume down",
+        _ => return None,
+    })
+}
+
 impl ButtonAction {
     pub fn label(&self) -> String {
         match *self {
             ButtonAction::Disabled => "disabled".into(),
             ButtonAction::Mouse(m) => mouse_button_name(m),
-            ButtonAction::Key { modifiers, usage } => format!("key {usage:#04x} (modifiers {modifiers:#04x})"),
-            ButtonAction::Consumer(c) => format!("media key {c:#06x}"),
+            ButtonAction::Key { modifiers, usage } => {
+                let mods: String = [(1, "Ctrl+"), (2, "Shift+"), (4, "Alt+"), (8, "Meta+")]
+                    .iter()
+                    .filter(|(bit, _)| modifiers & bit != 0)
+                    .map(|(_, n)| *n)
+                    .collect();
+                format!("key {mods}{}", key_name(usage).unwrap_or_else(|| format!("{usage:#04x}")))
+            }
+            ButtonAction::Consumer(c) => media_key_name(c).map_or(format!("media key {c:#06x}"), |n| n.to_string()),
             ButtonAction::Function { id, data } if data != 0 => format!("{} ({data})", function_name(id)),
             ButtonAction::Function { id, .. } => function_name(id).into(),
             ButtonAction::Macro { stop: false, .. } => "run a macro".into(),
@@ -332,8 +379,16 @@ pub trait Peripheral: Send {
         Err(Error::Unsupported("tones"))
     }
     /// Play interleaved 16-bit PCM (`channels` 1 or 2, sample rate `rate`) on the built-in speaker
-    /// and return when it has been sent; `volume` is 0..=100.
-    fn play_audio(&mut self, _samples: &[i16], _rate: u32, _channels: u16, _volume: u8) -> Result<()> {
+    /// and return when it has been sent; `volume` is 0..=100. `stop` is polled while playing and
+    /// ends the playback early when it returns true.
+    fn play_audio(
+        &mut self,
+        _samples: &[i16],
+        _rate: u32,
+        _channels: u16,
+        _volume: u8,
+        _stop: &dyn Fn() -> bool,
+    ) -> Result<()> {
         Err(Error::Unsupported("speaker"))
     }
     /// Read the onboard profiles (read-only).
@@ -467,6 +522,13 @@ pub mod bluetooth {
         use super::parse_battery;
 
         #[test]
+    fn key_and_media_labels() {
+        assert_eq!(crate::ButtonAction::Key { modifiers: 1, usage: 0x04 }.label(), "key Ctrl+A");
+        assert_eq!(crate::ButtonAction::Key { modifiers: 0, usage: 0x3A }.label(), "key F1");
+        assert_eq!(crate::ButtonAction::Consumer(0xCD).label(), "play / pause");
+    }
+
+    #[test]
         fn parses_bluetoothctl_output() {
             let info = "Device AA:BB (public)\n\tConnected: yes\n\tBattery Percentage: 0x4b (75)\n";
             assert_eq!(parse_battery(info), Some(75));

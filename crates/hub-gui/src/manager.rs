@@ -2,11 +2,14 @@
 //! disappearing, polls batteries and applies colour changes, so the UI never blocks on USB.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hub_core::{Battery, Capability, EffectSetting, Hub, Info, Motor, Peripheral, Rgb, Settings};
+use hub_core::{Battery, ButtonAction, Capability, EffectSetting, Hub, Info, Motor, Peripheral, Profile, Rgb, Settings};
 
 /// Vendors the hub watches; a change in their HID nodes triggers a rescan.
 const WATCHED_VIDS: [u16; 6] = [s85_protocol::VID, 0x046D, 0x054C, 0x045E, 0x057E, 0x28DE];
@@ -15,6 +18,13 @@ const TICK: Duration = Duration::from_secs(2);
 const BATTERY_EVERY: Duration = Duration::from_secs(30);
 /// A receiver with no mouse behind it is probed again this often (the mouse may just be asleep).
 const REPROBE_EVERY: Duration = Duration::from_secs(10);
+
+/// Sound to play on a device's speaker: interleaved 16-bit PCM.
+pub struct Audio {
+    pub samples: Vec<i16>,
+    pub rate: u32,
+    pub channels: u16,
+}
 
 #[derive(Clone)]
 pub struct DeviceView {
@@ -36,6 +46,16 @@ pub enum Cmd {
     /// Play a planned MIDI schedule on the device (replaces any playback already running on it).
     Play { id: String, events: Vec<hub_midi::Event> },
     StopPlay { id: String },
+    /// Stream sound to the device's speaker. Blocks the device thread until it is over or stopped
+    /// through [`Manager::stop_audio`].
+    PlayAudio { id: String, audio: Arc<Audio>, volume: u8 },
+    Tone { id: String, voice: usize, hz: u16, ms: u16, volume: u8 },
+    /// Read the onboard profiles and which one runs; answered with [`Update::Profiles`].
+    LoadProfiles { id: String },
+    SetActiveProfile { id: String, index: usize },
+    SetButton { id: String, profile: usize, button: usize, action: ButtonAction },
+    ExportProfiles { id: String, path: PathBuf },
+    ImportProfiles { id: String, path: PathBuf },
 }
 
 impl Cmd {
@@ -50,6 +70,13 @@ impl Cmd {
             Cmd::Rumble { id, .. } => (5, id, 0),
             Cmd::Play { id, .. } => (6, id, 0),
             Cmd::StopPlay { id } => (7, id, 0),
+            Cmd::PlayAudio { id, .. } => (8, id, 0),
+            Cmd::Tone { id, voice, .. } => (9, id, *voice),
+            Cmd::LoadProfiles { id } => (10, id, 0),
+            Cmd::SetActiveProfile { id, .. } => (11, id, 0),
+            Cmd::SetButton { id, profile, button, .. } => (12, id, profile * 64 + button),
+            Cmd::ExportProfiles { id, .. } => (13, id, 0),
+            Cmd::ImportProfiles { id, .. } => (14, id, 0),
         }
     }
 
@@ -65,19 +92,32 @@ pub enum Update {
     Error(String),
     /// A MIDI playback finished or was stopped.
     PlaybackEnded(String),
+    /// The onboard profiles of a device and the index of the running one.
+    Profiles { id: String, profiles: Vec<Profile>, active: Option<usize> },
+    /// A message that is not an error (a backup was saved...).
+    Notice(String),
 }
 
 pub struct Manager {
     tx: Sender<Cmd>,
     pub rx: Receiver<Update>,
+    /// Set to end a running [`Cmd::PlayAudio`]; the device thread is busy with it and cannot read
+    /// the command queue meanwhile.
+    stop_audio: Arc<AtomicBool>,
 }
 
 impl Manager {
     pub fn spawn(ctx: eframe::egui::Context) -> Manager {
         let (tx, cmd_rx) = channel();
         let (up_tx, rx) = channel();
-        thread::spawn(move || run(cmd_rx, up_tx, ctx));
-        Manager { tx, rx }
+        let stop_audio = Arc::new(AtomicBool::new(false));
+        let stop = stop_audio.clone();
+        thread::spawn(move || run(cmd_rx, up_tx, ctx, stop));
+        Manager { tx, rx, stop_audio }
+    }
+
+    pub fn stop_audio(&self) {
+        self.stop_audio.store(true, Ordering::Relaxed);
     }
 
     pub fn send(&self, cmd: Cmd) {
@@ -161,7 +201,7 @@ fn poll_batteries(s: &mut State) -> bool {
     failed
 }
 
-fn run(cmds: Receiver<Cmd>, updates: Sender<Update>, ctx: eframe::egui::Context) {
+fn run(cmds: Receiver<Cmd>, updates: Sender<Update>, ctx: eframe::egui::Context, stop_audio: Arc<AtomicBool>) {
     let emit = |u: Update| {
         let _ = updates.send(u);
         ctx.request_repaint();
@@ -243,6 +283,41 @@ fn run(cmds: Receiver<Cmd>, updates: Sender<Update>, ctx: eframe::egui::Context)
                         emit(Update::PlaybackEnded(id.clone()));
                     }
                     Ok(())
+                }
+                Cmd::PlayAudio { audio, volume, .. } => {
+                    stop_audio.store(false, Ordering::Relaxed);
+                    let r = d.play_audio(&audio.samples, audio.rate, audio.channels, volume, &|| {
+                        stop_audio.load(Ordering::Relaxed)
+                    });
+                    emit(Update::PlaybackEnded(id.clone()));
+                    r
+                }
+                Cmd::Tone { voice, hz, ms, volume, .. } => d.tone(voice, hz, ms, volume),
+                Cmd::LoadProfiles { .. } => {
+                    emit_profiles(d.as_mut(), &emit);
+                    Ok(())
+                }
+                Cmd::SetActiveProfile { index, .. } => {
+                    let r = d.set_active_profile(index);
+                    emit_profiles(d.as_mut(), &emit);
+                    r
+                }
+                Cmd::SetButton { profile, button, action, .. } => {
+                    let r = d.set_button(profile, button, action);
+                    emit_profiles(d.as_mut(), &emit);
+                    r
+                }
+                Cmd::ExportProfiles { path, .. } => d
+                    .export_profiles()
+                    .and_then(|text| std::fs::write(&path, text).map_err(|e| hub_core::Error::Protocol(e.to_string())))
+                    .map(|()| emit(Update::Notice(format!("Backup saved to {}", path.display())))),
+                Cmd::ImportProfiles { path, .. } => {
+                    let r = std::fs::read_to_string(&path)
+                        .map_err(|e| hub_core::Error::Protocol(e.to_string()))
+                        .and_then(|text| d.import_profiles(&text))
+                        .map(|()| emit(Update::Notice("Backup restored".into())));
+                    emit_profiles(d.as_mut(), &emit);
+                    r
                 }
             };
             if let Err(e) = result {
@@ -329,6 +404,15 @@ fn run(cmds: Receiver<Cmd>, updates: Sender<Update>, ctx: eframe::egui::Context)
             }
             emit(Update::Devices(views(&s)));
         }
+    }
+}
+
+/// Read the profiles and the running one from a device and tell the UI; a device without profiles
+/// or one that does not answer simply sends nothing.
+fn emit_profiles(d: &mut dyn Peripheral, emit: &dyn Fn(Update)) {
+    if let Ok(profiles) = d.profiles() {
+        let active = d.active_profile().ok().flatten();
+        emit(Update::Profiles { id: d.info().id.clone(), profiles, active });
     }
 }
 

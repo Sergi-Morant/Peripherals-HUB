@@ -222,7 +222,7 @@ impl Peripheral for Ds4 {
         self.send()
     }
 
-    fn play_audio(&mut self, samples: &[i16], rate: u32, channels: u16, volume: u8) -> Result<()> {
+    fn play_audio(&mut self, samples: &[i16], rate: u32, channels: u16, volume: u8, stop: &dyn Fn() -> bool) -> Result<()> {
         if self.info.transport != Transport::Bluetooth {
             return Err(Error::Unsupported("speaker (only over Bluetooth)"));
         }
@@ -248,6 +248,9 @@ impl Peripheral for Ds4 {
         let lead = Duration::from_millis(96);
         let mut counter = 0u16;
         for (n, chunk) in pcm.chunks_exact(pair).enumerate() {
+            if stop() {
+                break;
+            }
             let a = enc.encode(&chunk[..pair / 2]);
             let b = enc.encode(&chunk[pair / 2..]);
             let mut frames = Vec::with_capacity(2 * sbc::FRAME_BYTES);
@@ -259,7 +262,9 @@ impl Peripheral for Ds4 {
                 std::thread::sleep(wait);
             }
         }
-        std::thread::sleep(lead);
+        if !stop() {
+            std::thread::sleep(lead); // let what is already buffered on the pad play out
+        }
         // Back to a plain output report: lightbar colour, no rumble, audio path off.
         self.send()
     }

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+* **GUI:** a Speaker card for the DualShock 4 (MIDI or WAV file, volume, test tone, stop), a Haptic
+  tones card for the Steam Controller, and a Buttons and profiles card for the G502 X Plus (pick
+  and run a profile, change what each button does, press a key to assign it, back up and restore).
 * **G502 X Plus onboard profiles** (command line): `hub profiles`, `hub button`, `hub profile`,
   `hub backup`, `hub restore`. One button was remapped on the real mouse and worked; the factory
   ROM profiles are copied to flash on the first edit (see `docs/DEVICES.md`).

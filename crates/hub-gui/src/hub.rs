@@ -6,6 +6,8 @@ use eframe::egui::{self, Frame, Margin, RichText};
 use hub_core::{Battery, Capability, EffectSetting, Kind, Rgb, Transport};
 
 mod cards;
+mod mouse;
+mod speaker;
 
 use crate::manager::{Cmd, DeviceView, Manager, Update};
 use crate::theme::{self, card, card_header, chip, page_header};
@@ -32,6 +34,17 @@ pub struct Hub {
     rumble: HashMap<(String, hub_core::Motor), u8>,
     /// The loaded MIDI file: display name and notes.
     midi: Option<(String, Vec<hub_midi::Note>)>,
+    /// Sound loaded for the speaker card: display name and samples.
+    audio: Option<(String, std::sync::Arc<crate::manager::Audio>)>,
+    /// Speaker volume per device (0..=100).
+    volume: HashMap<String, u8>,
+    /// Test tone settings per device: actuator, pitch in Hz, strength.
+    tone: HashMap<String, (usize, u16, u8)>,
+    /// Onboard profiles per mouse, and which mice were already asked for them.
+    profile_data: HashMap<String, mouse::ProfileState>,
+    profiles_asked: std::collections::HashSet<String>,
+    /// A button waiting for the user to press a key: (device, profile, button).
+    key_capture: Option<(String, usize, usize)>,
     /// Devices currently playing music.
     playing: std::collections::HashSet<String>,
     status: String,
@@ -55,6 +68,12 @@ impl Hub {
             rate_edit: HashMap::new(),
             rumble: HashMap::new(),
             midi: None,
+            audio: None,
+            volume: HashMap::new(),
+            tone: HashMap::new(),
+            profile_data: HashMap::new(),
+            profiles_asked: Default::default(),
+            key_capture: None,
             playing: Default::default(),
             status: "Looking for devices...".into(),
             status_is_error: false,
@@ -86,6 +105,14 @@ impl Hub {
                 }
                 Update::PlaybackEnded(id) => {
                     self.playing.remove(&id);
+                }
+                Update::Profiles { id, profiles, active } => {
+                    let shown = self.profile_data.get(&id).map_or(active.unwrap_or(0), |s| s.shown);
+                    self.profile_data.insert(id, mouse::ProfileState { profiles, active, shown });
+                }
+                Update::Notice(text) => {
+                    self.status = text;
+                    self.status_is_error = false;
                 }
                 Update::Error(e) => {
                     self.dpi_edit.clear();
@@ -316,6 +343,18 @@ impl Hub {
                 }
                 if d.caps.iter().any(|c| matches!(c, Capability::Tones(_) | Capability::Rumble(_))) {
                     self.music_card(ui, d);
+                    ui.add_space(12.0);
+                }
+                if speaker::has_speaker(d) {
+                    self.speaker_card(ui, d);
+                    ui.add_space(12.0);
+                }
+                if let Some(labels) = mouse::button_labels(d) {
+                    self.profiles_card(ui, d, &labels);
+                    ui.add_space(12.0);
+                }
+                if let Some(voices) = d.caps.iter().find_map(|c| if let Capability::Tones(n) = c { Some(*n) } else { None }) {
+                    self.tones_card(ui, d, voices);
                     ui.add_space(12.0);
                 }
                 if d.caps.contains(&Capability::HostMode) {

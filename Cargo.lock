@@ -1697,6 +1697,7 @@ dependencies = [
  "drv-steam",
  "drv-xbox",
  "eframe",
+ "hound",
  "hub-core",
  "hub-midi",
  "rfd",

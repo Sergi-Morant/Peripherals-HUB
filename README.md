@@ -32,7 +32,7 @@ Royal Kludge RK S85 keyboard, whose code is embedded here unchanged.
 Music: pick a `.mid` file and the haptics play it. The Steam Controller plays real notes on two
 voices; DualShock 4 and Xbox motors cannot change pitch, so the song becomes a rhythm there.
 
-Not done yet (see [docs/ROADMAP.md](docs/ROADMAP.md)): a GUI for mouse button remapping (the command line works),
+Not done yet (see [docs/ROADMAP.md](docs/ROADMAP.md)):
 controller button remapping, Steam Controller rumble and wired/Bluetooth modes, Xbox over USB or
 the 2.4 GHz adapter, GameCube adapter ports, remembered colours, Windows/macOS battery sources.
 
