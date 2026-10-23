@@ -103,7 +103,8 @@ the two disagree in places:
 **MIDI on the speaker and the motors together** (`hub play ds4 song.mid --both`, the music card's
 "Speaker" + "Vibration"): the rumble rhythm is carried in the control bytes of the audio reports (a
 `0x15` report is sent whenever the motor levels change, otherwise every third). Sent; see the
-status below.
+status below. **Vibration while the speaker plays makes the sound crackle** (tried at full and at half
+strength: no difference), so the GUI leaves vibration off by default.
 
 Not done: the `0x17` four-frame report, stopping playback early, a GUI control, and the
 headphone-jack path.
@@ -127,6 +128,10 @@ Needs read/write access to the hidraw node; without the udev rules the pad is li
 "Cannot control this device" note.
 
 ## Steam Controller (2026) through the Steam Controller Puck (`28de:1304`)
+
+> **Tone strength:** the `0x83` tone report's gain byte is signed dB. +12 dB felt weaker than +24, and
+> +24 and +40 felt the same on the author's controller, so the driver maps volume 0..100 to
+> -40..+24 dB (the old 0 dB maximum was much too quiet).
 
 > **macOS (reported, not understood):** the controller takes over the trackpad and appears as a
 > keyboard while the hub runs. hidapi's default exclusive open on macOS is switched off

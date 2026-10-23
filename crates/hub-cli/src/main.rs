@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use hub_core::{AudioOptions, ButtonAction, Capability, Effect, EffectSetting, Hub, Motor, Peripheral, Rgb};
+use hub_core::{AudioControl, AudioOptions, ButtonAction, Capability, Effect, EffectSetting, Hub, Motor, Peripheral, Rgb};
 
 #[derive(Parser)]
 #[command(name = "hub", version, about = "Control tool for the Peripherals HUB")]
@@ -326,11 +326,8 @@ fn main() -> Result<()> {
                     Some(Capability::Rumble(m)) if both => hub_midi::rumble_states(&hub_midi::plan_rhythm(&notes, m)),
                     _ => vec![],
                 };
-                let options = AudioOptions {
-                    volume: 80,
-                    stop: &|| false,
-                    rumble: &|ms| hub_midi::rumble_at(&states, ms),
-                };
+                let control = AudioControl::new();
+                let options = AudioOptions { volume: 80, control: &control, rumble: &|ms| hub_midi::rumble_at(&states, ms) };
                 d.play_audio(&hub_midi::render_pcm(&notes, 32_000), 32_000, 1, &options)?;
                 return Ok(());
             }
@@ -385,7 +382,7 @@ fn main() -> Result<()> {
                 (None, None) => bail!("give a WAV file or --tone HZ"),
             };
             println!("{} s at {rate} Hz", samples.len() / channels.max(1) as usize / rate as usize);
-            d.play_audio(&samples, rate, channels, &AudioOptions::plain(volume))?;
+            d.play_audio(&samples, rate, channels, &AudioOptions::plain(volume, &AudioControl::new()))?;
         }
         Cmd::Tone { device, voice, hz, ms, volume } => {
             find(&mut devices, &device)?.tone(voice, hz, ms, volume)?;

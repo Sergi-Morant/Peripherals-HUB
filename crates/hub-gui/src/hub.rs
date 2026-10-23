@@ -7,6 +7,7 @@ use hub_core::{Battery, Capability, EffectSetting, Kind, Rgb, Transport};
 
 mod cards;
 mod mouse;
+mod player;
 mod speaker;
 
 use crate::manager::{Cmd, DeviceView, Manager, Update};
@@ -47,8 +48,8 @@ pub struct Hub {
     profiles_asked: std::collections::HashSet<String>,
     /// A button waiting for the user to press a key: (device, profile, button).
     key_capture: Option<(String, usize, usize)>,
-    /// Devices currently playing music.
-    playing: std::collections::HashSet<String>,
+    /// Playbacks in progress, per device id.
+    players: HashMap<String, player::Player>,
     status: String,
     status_is_error: bool,
 }
@@ -77,7 +78,7 @@ impl Hub {
             profile_data: HashMap::new(),
             profiles_asked: Default::default(),
             key_capture: None,
-            playing: Default::default(),
+            players: HashMap::new(),
             status: "Looking for devices...".into(),
             status_is_error: false,
         }
@@ -107,7 +108,12 @@ impl Hub {
                     self.keyboard_present = present;
                 }
                 Update::PlaybackEnded(id) => {
-                    self.playing.remove(&id);
+                    self.players.remove(&id);
+                }
+                Update::Position { id, ms } => {
+                    if let Some(p) = self.players.get_mut(&id) {
+                        p.pos_ms = ms;
+                    }
                 }
                 Update::Profiles { id, profiles, active } => {
                     let shown = self.profile_data.get(&id).map_or(active.unwrap_or(0), |s| s.shown);
@@ -212,6 +218,10 @@ fn battery_text(b: Battery) -> String {
 impl eframe::App for Hub {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll();
+        // The position of sound on a speaker is read from shared state, so keep redrawing.
+        if self.players.values().any(|p| p.audio) {
+            root.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
 
         egui::Panel::left("devices")
             .exact_size(250.0)
@@ -346,10 +356,6 @@ impl Hub {
                 }
                 if d.caps.iter().any(|c| matches!(c, Capability::Tones(_) | Capability::Rumble(_))) {
                     self.music_card(ui, d);
-                    ui.add_space(12.0);
-                }
-                if speaker::has_speaker(d) {
-                    self.speaker_card(ui, d);
                     ui.add_space(12.0);
                 }
                 if let Some(labels) = mouse::button_labels(d) {

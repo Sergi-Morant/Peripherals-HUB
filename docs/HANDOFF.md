@@ -44,8 +44,11 @@ Read `README.md`, `docs/ARCHITECTURE.md` (crates, traits, how to add a driver), 
 * DS4 speaker over Bluetooth (`crates/drv-ds4/src/sbc.rs` is a small SBC encoder), speaker card and
   haptic-tone card in the GUI, G502 X Plus onboard profiles and button remapping (CLI and GUI card),
   public-domain example MIDI, udev note.
-* **MIDI on the DualShock 4 now plays through the speaker and the motors together**: the music card
-  has "Speaker" and "Vibration" switches (both on by default), `hub play ds4 song.mid --both`.
+* **MIDI on the DualShock 4 can play through the speaker, the motors or both**: the "Play music"
+  card has "Speaker" and "Vibration" ticks (vibration off by default because it makes the speaker
+  crackle), `hub play ds4 song.mid --speaker|--both`. There is one music card per device with Play,
+  Pause/Resume, Stop and a seek bar (pause and seek on the DS4 are done inside the audio stream:
+  `AudioControl` in `hub-core`).
   The rumble levels travel inside the audio reports (`Peripheral::play_audio` takes
   `AudioOptions` with a `rumble(ms)` callback), so the two stay in step. The speaker part was
   confirmed by the author on hardware; **speaker plus motors together: see the status in

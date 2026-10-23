@@ -185,15 +185,15 @@ impl Driver for SteamDriver {
 /// Output report `0x83` (LFO tone, 10 bytes, little-endian): side, gain in dB, frequency in Hz,
 /// duration in ms, LFO frequency, LFO depth. Layout from SDL's `controller_structs.h`.
 fn tone_report(side: u8, hz: u16, duration_ms: u16, volume: u8) -> [u8; 10] {
-    // Volume 100 = 0 dB (full), then 0.5 dB steps down to -40 dB at volume 0.
-    let gain_db = -(((100 - volume.min(100)) as i16 * 40) / 100) as i8;
+    // The gain is in signed dB and the actuators keep getting stronger up to about +24 dB (tried on
+    // a real controller: +12 is weaker, +24 and +40 feel the same). Volume 0 = -40 dB, 100 = +24 dB.
+    let gain_db = (-40 + volume.min(100) as i16 * 64 / 100) as i8;
     let mut r = [0u8; 10];
     r[0] = 0x83;
     r[1] = side;
     r[2] = gain_db as u8;
     r[3..5].copy_from_slice(&hz.to_le_bytes());
     r[5..7].copy_from_slice(&duration_ms.to_le_bytes());
-    // LFO off: bytes 7..10 stay zero.
     r
 }
 
@@ -204,8 +204,9 @@ mod tests {
     #[test]
     fn tone_report_layout() {
         let r = tone_report(1, 440, 500, 100);
-        assert_eq!(r, [0x83, 1, 0, 0xB8, 0x01, 0xF4, 0x01, 0, 0, 0]);
-        // Quieter volume gives a negative gain in dB.
-        assert!((tone_report(0, 440, 500, 50)[2] as i8) < 0);
+        assert_eq!(r, [0x83, 1, 24, 0xB8, 0x01, 0xF4, 0x01, 0, 0, 0]);
+        // -40 dB at volume 0, +24 dB at volume 100, linear in dB between.
+        assert_eq!(tone_report(0, 440, 500, 0)[2] as i8, -40);
+        assert_eq!(tone_report(0, 440, 500, 50)[2] as i8, -8);
     }
 }

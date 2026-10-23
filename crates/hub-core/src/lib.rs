@@ -3,6 +3,7 @@
 
 pub use hidapi::HidApi;
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// A new `HidApi`. On macOS hidapi opens devices exclusively by default, which takes them away from
@@ -354,21 +355,93 @@ pub struct Settings {
     pub host_mode: Option<bool>,
 }
 
+/// Controls shared between a running [`Peripheral::play_audio`] and whoever started it: the player
+/// sets pause, seek and stop, the driver reports its position.
+pub struct AudioControl {
+    stop: AtomicBool,
+    paused: AtomicBool,
+    seek_ms: AtomicU64,
+    position_ms: AtomicU64,
+}
+
+impl Default for AudioControl {
+    fn default() -> Self {
+        AudioControl::new()
+    }
+}
+
+impl AudioControl {
+    const NO_SEEK: u64 = u64::MAX;
+
+    pub fn new() -> AudioControl {
+        AudioControl {
+            stop: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
+            seek_ms: AtomicU64::new(Self::NO_SEEK),
+            position_ms: AtomicU64::new(0),
+        }
+    }
+
+    /// Back to the state of a new playback.
+    pub fn reset(&self) {
+        self.stop.store(false, Ordering::Relaxed);
+        self.paused.store(false, Ordering::Relaxed);
+        self.seek_ms.store(Self::NO_SEEK, Ordering::Relaxed);
+        self.position_ms.store(0, Ordering::Relaxed);
+    }
+
+    pub fn request_stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Relaxed);
+    }
+
+    pub fn paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
+    pub fn request_seek(&self, ms: u64) {
+        self.seek_ms.store(ms, Ordering::Relaxed);
+    }
+
+    /// The pending seek request, if any (clears it).
+    pub fn take_seek(&self) -> Option<u64> {
+        match self.seek_ms.swap(Self::NO_SEEK, Ordering::Relaxed) {
+            Self::NO_SEEK => None,
+            ms => Some(ms),
+        }
+    }
+
+    pub fn set_position(&self, ms: u64) {
+        self.position_ms.store(ms, Ordering::Relaxed);
+    }
+
+    pub fn position(&self) -> u64 {
+        self.position_ms.load(Ordering::Relaxed)
+    }
+}
+
 /// How [`Peripheral::play_audio`] should play.
 pub struct AudioOptions<'a> {
     /// 0..=100
     pub volume: u8,
-    /// Polled while playing; the playback ends early when it returns true.
-    pub stop: &'a dyn Fn() -> bool,
-    /// Motor levels wanted this many milliseconds after the start, shaken along with the sound by
-    /// devices that can do both (empty = no vibration).
+    /// Pause, seek and stop requests in, position out.
+    pub control: &'a AudioControl,
+    /// Motor levels wanted this many milliseconds after the start of the sound, shaken along with
+    /// it by devices that can do both (empty = no vibration).
     pub rumble: &'a dyn Fn(u64) -> Vec<(Motor, u8)>,
 }
 
-impl AudioOptions<'_> {
-    /// Sound only, no stopping, no vibration.
-    pub fn plain(volume: u8) -> AudioOptions<'static> {
-        AudioOptions { volume, stop: &|| false, rumble: &|_| Vec::new() }
+impl<'a> AudioOptions<'a> {
+    /// Sound only, no vibration.
+    pub fn plain(volume: u8, control: &'a AudioControl) -> AudioOptions<'a> {
+        AudioOptions { volume, control, rumble: &|_| Vec::new() }
     }
 }
 

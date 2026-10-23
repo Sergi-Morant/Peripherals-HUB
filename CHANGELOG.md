@@ -18,8 +18,13 @@ Everything marked "tested" below was tried on real hardware by the author.
   `--tone HZ` and `hub play ds4 song.mid --speaker`. Uses a built-in SBC encoder. Tested.
 * **Steam Controller:** a "Haptic tones" card to try a pitch on each actuator; MIDI playback through
   the haptics was already there. Tested.
-* **DualShock 4:** MIDI files now play through the speaker and the vibration motors together (the
-  music card has "Speaker" and "Vibration" switches; `hub play ds4 song.mid --both`).
+* **One "Play music" card** for every device that can play: choose a MIDI file (or a WAV file on
+  the DualShock 4), then Play, Pause/Resume, Stop and a seek bar with the time. Pause and seek work
+  on the DualShock 4's speaker and on the Steam Controller's haptics.
+* **DualShock 4:** the music card has "Speaker" and "Vibration" ticks (`hub play ds4 song.mid
+  --speaker` or `--both`). Vibration is off by default: with it on, the speaker crackles.
+* **Steam Controller:** tones are much stronger. The gain field is signed dB and the actuators keep
+  getting stronger up to about +24 dB; the old scale stopped at 0 dB.
 * **macOS:** devices are no longer opened exclusively, so the hub does not take a controller's
   mouse/keyboard emulation away from the system (reported with the Steam Controller; unverified).
 * The example MIDI is now a public-domain tune (`examples/ode-to-joy.mid`) instead of a transcription

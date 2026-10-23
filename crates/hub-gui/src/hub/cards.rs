@@ -3,6 +3,7 @@
 use eframe::egui::{self, RichText};
 use hub_core::{Capability, Effect, EffectSetting, Motor, Rgb, Settings};
 
+use super::player::PlayerAction;
 use super::Hub;
 use crate::manager::{Cmd, DeviceView};
 use crate::theme::{self, card, card_header, hint, segmented};
@@ -149,37 +150,46 @@ impl Hub {
         }
     }
 
-    /// Play a MIDI file through the device: real notes on tone-capable actuators, a rhythm otherwise.
+    /// Play a MIDI or WAV file on the device: real notes on tone-capable actuators, a rhythm on plain
+    /// motors, and/or sound from a built-in speaker.
     pub(super) fn music_card(&mut self, ui: &mut egui::Ui, d: &DeviceView) {
         let tones = d.caps.iter().find_map(|c| if let Capability::Tones(n) = c { Some(*n as usize) } else { None });
         let motors = d.caps.iter().find_map(|c| if let Capability::Rumble(m) = c { Some(m.clone()) } else { None });
-        let playing = self.playing.contains(&d.info.id);
         let has_speaker = d.caps.contains(&Capability::Speaker);
         // Pads with a speaker and motors can use either or both; the others only vibrate.
-        let (mut use_speaker, mut use_rumble) = *self.music_output.get(&d.info.id).unwrap_or(&(true, true));
-        let mut action: Option<bool> = None; // Some(true) = play, Some(false) = stop
+        let (mut use_speaker, mut use_rumble) = *self.music_output.get(&d.info.id).unwrap_or(&(true, false));
+        let mut action = None;
+        let mut test_tone = false;
         card(ui, |ui| {
             card_header(
                 ui,
                 icons::MUSIC_NOTES,
                 "Play music",
-                if tones.is_some() {
+                if has_speaker {
+                    "Plays a MIDI or WAV file through the controller's speaker and/or as vibration"
+                } else if tones.is_some() {
                     "Plays the notes of a MIDI file through the haptic actuators"
                 } else {
                     "These motors cannot change pitch, so a MIDI file becomes a rhythm: low notes on one motor, high notes on the other"
                 },
             );
             ui.horizontal(|ui| {
-                if ui.button(format!("{}  Choose MIDI file", icons::FILE_IMAGE)).clicked() {
-                    if let Some(path) = rfd::FileDialog::new().add_filter("MIDI", &["mid", "midi"]).pick_file() {
-                        match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| hub_midi::parse(&b)) {
-                            Ok(notes) => {
-                                let name = path.file_name().map_or("MIDI file".into(), |n| n.to_string_lossy().into_owned());
+                let label = if has_speaker { "Choose a MIDI or WAV file" } else { "Choose MIDI file" };
+                if ui.button(format!("{}  {label}", icons::FILE_IMAGE)).clicked() {
+                    let exts: &[&str] = if has_speaker { &["mid", "midi", "wav"] } else { &["mid", "midi"] };
+                    if let Some(path) = rfd::FileDialog::new().add_filter("Music", exts).pick_file() {
+                        let name = path.file_name().map_or("file".into(), |n| n.to_string_lossy().into_owned());
+                        match super::speaker::load_source(&path) {
+                            Ok(super::speaker::Source::Midi(notes)) => {
                                 self.midi = Some((name, notes));
+                                self.audio = None;
+                            }
+                            Ok(super::speaker::Source::Wav(audio)) => {
+                                self.audio = Some((name, std::sync::Arc::new(audio)));
+                                self.midi = None;
                             }
                             Err(e) => {
-                                self.midi = None;
-                                self.status = format!("MIDI: {e}");
+                                self.status = format!("Music: {e}");
                                 self.status_is_error = true;
                             }
                         }
@@ -190,34 +200,81 @@ impl Hub {
                         RichText::new(format!("{name}  ·  {} notes, {} s", notes.len(), hub_midi::total_ms(notes) / 1000))
                             .color(theme::TEXT_MUTED),
                     );
+                } else if let Some((name, a)) = &self.audio {
+                    ui.label(RichText::new(format!("{name}  ·  {} s", super::speaker::seconds(a))).color(theme::TEXT_MUTED));
                 }
             });
+            let wav = self.audio.is_some();
             if has_speaker {
                 ui.horizontal(|ui| {
                     ui.label("Play through");
                     ui.checkbox(&mut use_speaker, "Speaker");
-                    ui.checkbox(&mut use_rumble, "Vibration");
+                    ui.add_enabled(!wav, egui::Checkbox::new(&mut use_rumble, "Vibration"));
                 });
+                if wav {
+                    use_speaker = true;
+                    use_rumble = false;
+                }
+                if use_speaker {
+                    let volume = self.volume.entry(d.info.id.clone()).or_insert(60);
+                    ui.horizontal(|ui| {
+                        ui.label("Speaker volume");
+                        let mut v = *volume as f32;
+                        if ui.add(egui::Slider::new(&mut v, 0.0..=100.0).step_by(1.0)).changed() {
+                            *volume = v as u8;
+                        }
+                    });
+                }
+                if use_speaker && use_rumble {
+                    hint(ui, "Vibration while the speaker plays can make the sound crackle.");
+                }
             }
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                let ready = self.midi.is_some() && (!has_speaker || use_speaker || use_rumble);
-                if playing {
-                    if ui.button(format!("{}  Stop", icons::PAUSE)).clicked() {
-                        action = Some(false);
+            let have_file = self.midi.is_some() || (wav && has_speaker);
+            let ready = have_file && (!has_speaker || use_speaker || use_rumble);
+            action = self.player_bar(ui, &d.info.id, "music", ready);
+            if has_speaker {
+                ui.horizontal(|ui| {
+                    if ui.button("Play a test tone").clicked() {
+                        test_tone = true;
                     }
-                } else if theme::primary_button(ui, ready, format!("{}  Play", icons::PLAY)).clicked() {
-                    action = Some(true);
-                }
-            });
+                });
+                hint(
+                    ui,
+                    "The controller buzzes once when the speaker starts. While sound plays, the hub cannot change \
+                     anything else on this controller.",
+                );
+            }
         });
         if has_speaker {
             self.music_output.insert(d.info.id.clone(), (use_speaker, use_rumble));
         }
+        if test_tone {
+            let rate = 32_000u32;
+            let samples: Vec<i16> =
+                (0..rate * 2).map(|i| (20_000.0 * (std::f32::consts::TAU * 1500.0 * i as f32 / rate as f32).sin()) as i16).collect();
+            let volume = *self.volume.get(&d.info.id).unwrap_or(&60);
+            let audio = std::sync::Arc::new(crate::manager::Audio { samples, rate, channels: 1 });
+            self.manager.send(Cmd::PlayAudio { id: d.info.id.clone(), audio, volume, rumble: Default::default() });
+            self.start_player(&d.info.id, "music", 2000, true);
+            return;
+        }
         match action {
-            Some(true) => {
+            Some(PlayerAction::Play) => {
+                let volume = *self.volume.get(&d.info.id).unwrap_or(&60);
+                if let (true, Some((_, a))) = (has_speaker, &self.audio) {
+                    let total = super::speaker::seconds_ms(a);
+                    self.manager.send(Cmd::PlayAudio {
+                        id: d.info.id.clone(),
+                        audio: a.clone(),
+                        volume,
+                        rumble: Default::default(),
+                    });
+                    self.start_player(&d.info.id, "music", total, true);
+                    return;
+                }
                 let Some((_, notes)) = &self.midi else { return };
-                self.playing.insert(d.info.id.clone());
+                let total = hub_midi::total_ms(notes);
                 if has_speaker && use_speaker {
                     // Sound from the speaker, with the vibration rhythm riding along if wanted.
                     let states = match (&motors, use_rumble) {
@@ -229,13 +286,13 @@ impl Hub {
                         rate: 32_000,
                         channels: 1,
                     };
-                    let volume = *self.volume.get(&d.info.id).unwrap_or(&60);
                     self.manager.send(Cmd::PlayAudio {
                         id: d.info.id.clone(),
                         audio: std::sync::Arc::new(audio),
                         volume,
                         rumble: std::sync::Arc::new(states),
                     });
+                    self.start_player(&d.info.id, "music", total, true);
                 } else {
                     let events = match (tones, motors) {
                         (Some(voices), _) => hub_midi::plan_tones(notes, voices),
@@ -243,12 +300,10 @@ impl Hub {
                         _ => vec![],
                     };
                     self.manager.send(Cmd::Play { id: d.info.id.clone(), events });
+                    self.start_player(&d.info.id, "music", total, false);
                 }
             }
-            Some(false) => {
-                self.manager.stop_audio();
-                self.manager.send(Cmd::StopPlay { id: d.info.id.clone() });
-            }
+            Some(other) => self.player_do(&d.info.id, other),
             None => {}
         }
     }

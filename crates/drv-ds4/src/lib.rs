@@ -116,7 +116,7 @@ fn audio_report(with_control: bool, control: &[u8], counter: u16, frames: &[u8])
 
 /// `(strong, weak)` motor bytes for motor levels of 0..=100.
 fn motor_bytes(levels: &[(Motor, u8)]) -> (u8, u8) {
-    let get = |m: Motor| levels.iter().find(|(k, _)| *k == m).map_or(0, |(_, l)| (l.min(&100).to_owned() as u16 * 255 / 100) as u8);
+    let get = |m: Motor| levels.iter().find(|(k, _)| *k == m).map_or(0, |(_, l)| (u16::from((*l).min(100)) * 255 / 100) as u8);
     (get(Motor::Strong), get(Motor::Weak))
 }
 
@@ -246,35 +246,50 @@ impl Peripheral for Ds4 {
         std::thread::sleep(Duration::from_millis(50));
 
         let mut enc = sbc::Encoder::default();
+        let control = options.control;
         let start = Instant::now();
         // Each report carries two SBC frames = 256 samples per channel = 8 ms of sound, so one
         // report every 8 ms, staying about 96 ms ahead of real time so Bluetooth hiccups do not make
         // it stutter. The motor levels ride along in the control block, which is also sent every
-        // third report to keep the volume alive.
+        // third report to keep the volume alive. While paused, silence keeps the stream going.
         let step = Duration::from_millis(8);
         let lead = Duration::from_millis(96);
+        let chunks = pcm.len() / pair;
+        let silence = vec![0i16; pair];
+        let (mut n, mut sent) = (0usize, 0u32);
         let mut counter = 0u16;
         let mut motors = (0u8, 0u8);
-        for (n, chunk) in pcm.chunks_exact(pair).enumerate() {
-            if (options.stop)() {
+        while n < chunks {
+            if control.stopped() {
                 break;
             }
+            if let Some(ms) = control.take_seek() {
+                n = ((ms / 8) as usize).min(chunks - 1);
+                enc = sbc::Encoder::default();
+            }
+            let paused = control.paused();
+            let chunk = if paused { &silence[..] } else { &pcm[n * pair..(n + 1) * pair] };
             let a = enc.encode(&chunk[..pair / 2]);
             let b = enc.encode(&chunk[pair / 2..]);
             let mut frames = Vec::with_capacity(2 * sbc::FRAME_BYTES);
             frames.extend_from_slice(&a);
             frames.extend_from_slice(&b);
-            let wanted = motor_bytes(&(options.rumble)(n as u64 * 8));
+            let wanted = if paused { (0, 0) } else { motor_bytes(&(options.rumble)(n as u64 * 8)) };
             let changed = wanted != motors;
             motors = wanted;
-            let control = audio_control_report(self.color, volume, motors.0, motors.1);
-            self.hid.write(&audio_report(n % 3 == 0 || changed, &control, counter, &frames))?;
+            let control_block = audio_control_report(self.color, volume, motors.0, motors.1);
+            self.hid.write(&audio_report(sent % 3 == 0 || changed, &control_block, counter, &frames))?;
             counter = counter.wrapping_add(2);
-            if let Some(wait) = (step * (n as u32 + 1)).checked_sub(lead + start.elapsed()) {
+            if !paused {
+                n += 1;
+            }
+            control.set_position(n as u64 * 8);
+            sent += 1;
+            if let Some(wait) = (step * sent).checked_sub(lead + start.elapsed()) {
                 std::thread::sleep(wait);
             }
         }
-        if !(options.stop)() {
+        if !control.stopped() {
             std::thread::sleep(lead); // let what is already buffered on the pad play out
         }
         // Back to a plain output report: lightbar colour, no rumble, audio path off.

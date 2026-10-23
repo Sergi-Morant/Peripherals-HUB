@@ -3,13 +3,12 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hub_core::{Battery, ButtonAction, Capability, EffectSetting, Hub, Info, Motor, Peripheral, Profile, Rgb, Settings};
+use hub_core::{AudioControl, Battery, ButtonAction, Capability, EffectSetting, Hub, Info, Motor, Peripheral, Profile, Rgb, Settings};
 
 /// Vendors the hub watches; a change in their HID nodes triggers a rescan.
 const WATCHED_VIDS: [u16; 6] = [s85_protocol::VID, 0x046D, 0x054C, 0x045E, 0x057E, 0x28DE];
@@ -49,6 +48,10 @@ pub enum Cmd {
     /// Play a planned MIDI schedule on the device (replaces any playback already running on it).
     Play { id: String, events: Vec<hub_midi::Event> },
     StopPlay { id: String },
+    /// Pause or resume a [`Cmd::Play`] playback.
+    Pause { id: String, paused: bool },
+    /// Jump to this many milliseconds into a [`Cmd::Play`] playback.
+    Seek { id: String, ms: u64 },
     /// Stream sound to the device's speaker. Blocks the device thread until it is over or stopped
     /// through [`Manager::stop_audio`].
     PlayAudio { id: String, audio: Arc<Audio>, volume: u8, rumble: Arc<RumbleStates> },
@@ -73,6 +76,8 @@ impl Cmd {
             Cmd::Rumble { id, .. } => (5, id, 0),
             Cmd::Play { id, .. } => (6, id, 0),
             Cmd::StopPlay { id } => (7, id, 0),
+            Cmd::Pause { id, .. } => (15, id, 0),
+            Cmd::Seek { id, .. } => (16, id, 0),
             Cmd::PlayAudio { id, .. } => (8, id, 0),
             Cmd::Tone { id, voice, .. } => (9, id, *voice),
             Cmd::LoadProfiles { id } => (10, id, 0),
@@ -97,6 +102,8 @@ pub enum Update {
     PlaybackEnded(String),
     /// The onboard profiles of a device and the index of the running one.
     Profiles { id: String, profiles: Vec<Profile>, active: Option<usize> },
+    /// How far a [`Cmd::Play`] playback has got, in milliseconds.
+    Position { id: String, ms: u64 },
     /// A message that is not an error (a backup was saved...).
     Notice(String),
 }
@@ -104,23 +111,23 @@ pub enum Update {
 pub struct Manager {
     tx: Sender<Cmd>,
     pub rx: Receiver<Update>,
-    /// Set to end a running [`Cmd::PlayAudio`]; the device thread is busy with it and cannot read
-    /// the command queue meanwhile.
-    stop_audio: Arc<AtomicBool>,
+    /// Pause, seek and stop of a running [`Cmd::PlayAudio`]: the device thread is busy with it and
+    /// cannot read the command queue meanwhile, so these are set directly.
+    audio: Arc<AudioControl>,
 }
 
 impl Manager {
     pub fn spawn(ctx: eframe::egui::Context) -> Manager {
         let (tx, cmd_rx) = channel();
         let (up_tx, rx) = channel();
-        let stop_audio = Arc::new(AtomicBool::new(false));
-        let stop = stop_audio.clone();
-        thread::spawn(move || run(cmd_rx, up_tx, ctx, stop));
-        Manager { tx, rx, stop_audio }
+        let audio = Arc::new(AudioControl::new());
+        let control = audio.clone();
+        thread::spawn(move || run(cmd_rx, up_tx, ctx, control));
+        Manager { tx, rx, audio }
     }
 
-    pub fn stop_audio(&self) {
-        self.stop_audio.store(true, Ordering::Relaxed);
+    pub fn audio(&self) -> &AudioControl {
+        &self.audio
     }
 
     pub fn send(&self, cmd: Cmd) {
@@ -204,7 +211,7 @@ fn poll_batteries(s: &mut State) -> bool {
     failed
 }
 
-fn run(cmds: Receiver<Cmd>, updates: Sender<Update>, ctx: eframe::egui::Context, stop_audio: Arc<AtomicBool>) {
+fn run(cmds: Receiver<Cmd>, updates: Sender<Update>, ctx: eframe::egui::Context, audio_control: Arc<AudioControl>) {
     let emit = |u: Update| {
         let _ = updates.send(u);
         ctx.request_repaint();
@@ -234,7 +241,7 @@ fn run(cmds: Receiver<Cmd>, updates: Sender<Update>, ctx: eframe::egui::Context,
     let mut checked = long_ago;
     loop {
         let now = Instant::now();
-        let mut wait = if playing.is_empty() { TICK.saturating_sub(checked.elapsed()) } else { TICK };
+        let mut wait = if playing.is_empty() { TICK.saturating_sub(checked.elapsed()) } else { Duration::from_millis(250) };
         for (t, _) in &stops {
             wait = wait.min(t.saturating_duration_since(now));
         }
@@ -287,11 +294,27 @@ fn run(cmds: Receiver<Cmd>, updates: Sender<Update>, ctx: eframe::egui::Context,
                     }
                     Ok(())
                 }
+                Cmd::Pause { paused, .. } => {
+                    if let Some(p) = playing.get_mut(&id) {
+                        p.set_paused(paused);
+                        if paused {
+                            silence(d.as_mut());
+                        }
+                    }
+                    Ok(())
+                }
+                Cmd::Seek { ms, .. } => {
+                    if let Some(p) = playing.get_mut(&id) {
+                        p.seek(ms);
+                        silence(d.as_mut());
+                    }
+                    Ok(())
+                }
                 Cmd::PlayAudio { audio, volume, rumble, .. } => {
-                    stop_audio.store(false, Ordering::Relaxed);
+                    audio_control.reset();
                     let options = hub_core::AudioOptions {
                         volume,
-                        stop: &|| stop_audio.load(Ordering::Relaxed),
+                        control: &audio_control,
                         rumble: &|ms| hub_midi::rumble_at(&rumble, ms),
                     };
                     let r = d.play_audio(&audio.samples, audio.rate, audio.channels, &options);
@@ -377,6 +400,12 @@ fn run(cmds: Receiver<Cmd>, updates: Sender<Update>, ctx: eframe::egui::Context,
                 emit(Update::PlaybackEnded(id));
             }
         }
+        for (id, p) in playing.iter_mut() {
+            if p.last_report.elapsed() >= Duration::from_millis(250) {
+                p.last_report = Instant::now();
+                emit(Update::Position { id: id.clone(), ms: p.position_ms() });
+            }
+        }
 
         // Housekeeping: hotplug scan, battery polling. Skipped while music plays so scans (which
         // can take seconds) do not disturb the timing.
@@ -422,26 +451,59 @@ fn emit_profiles(d: &mut dyn Peripheral, emit: &dyn Fn(Update)) {
     }
 }
 
-/// A MIDI schedule being played: events are fired as their time comes.
+/// A MIDI schedule being played: events are fired as their time comes. Can be paused and moved.
 struct Playback {
     events: Vec<hub_midi::Event>,
     next: usize,
+    /// Where the playback was when the clock below was last started, in milliseconds.
+    base_ms: u64,
     started: Instant,
+    paused: bool,
+    last_report: Instant,
 }
 
 impl Playback {
     fn new(events: Vec<hub_midi::Event>) -> Playback {
-        Playback { events, next: 0, started: Instant::now() }
+        Playback { events, next: 0, base_ms: 0, started: Instant::now(), paused: false, last_report: Instant::now() }
+    }
+
+    fn position_ms(&self) -> u64 {
+        if self.paused {
+            self.base_ms
+        } else {
+            self.base_ms + self.started.elapsed().as_millis() as u64
+        }
+    }
+
+    fn set_paused(&mut self, paused: bool) {
+        if paused == self.paused {
+            return;
+        }
+        self.base_ms = self.position_ms();
+        self.started = Instant::now();
+        self.paused = paused;
+    }
+
+    fn seek(&mut self, ms: u64) {
+        self.base_ms = ms;
+        self.started = Instant::now();
+        self.next = self.events.partition_point(|e| e.at_ms < ms);
     }
 
     fn next_due(&self) -> Instant {
-        self.events.get(self.next).map_or(Instant::now() + TICK, |e| self.started + Duration::from_millis(e.at_ms))
+        match self.events.get(self.next) {
+            Some(e) if !self.paused => Instant::now() + Duration::from_millis(e.at_ms.saturating_sub(self.position_ms())),
+            _ => Instant::now() + TICK,
+        }
     }
 
     /// The next event whose time has come, if any.
     fn take_due(&mut self) -> Option<hub_midi::Action> {
+        if self.paused {
+            return None;
+        }
         let e = self.events.get(self.next)?;
-        if self.started + Duration::from_millis(e.at_ms) > Instant::now() {
+        if e.at_ms > self.position_ms() {
             return None;
         }
         self.next += 1;
