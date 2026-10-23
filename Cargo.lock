@@ -910,7 +910,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "drv-ds4"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hidapi",
  "hub-core",
@@ -918,7 +918,7 @@ dependencies = [
 
 [[package]]
 name = "drv-g502x"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hidapi",
  "hub-core",
@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "drv-gamepads"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hidapi",
  "hub-core",
@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "drv-steam"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hidapi",
  "hub-core",
@@ -942,7 +942,7 @@ dependencies = [
 
 [[package]]
 name = "drv-xbox"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hidapi",
  "hub-core",
@@ -1662,7 +1662,7 @@ checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
 
 [[package]]
 name = "hub-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1678,7 +1678,7 @@ dependencies = [
 
 [[package]]
 name = "hub-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hidapi",
  "thiserror 2.0.21",
@@ -1686,7 +1686,7 @@ dependencies = [
 
 [[package]]
 name = "hub-gui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1709,7 +1709,7 @@ dependencies = [
 
 [[package]]
 name = "hub-midi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hub-core",
  "midly",
@@ -3132,7 +3132,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "s85-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3142,7 +3142,7 @@ dependencies = [
 
 [[package]]
 name = "s85-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hidapi",
  "image",

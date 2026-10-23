@@ -1,17 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — 2026-10-23
 
-* **GUI:** a Speaker card for the DualShock 4 (MIDI or WAV file, volume, test tone, stop), a Haptic
-  tones card for the Steam Controller, and a Buttons and profiles card for the G502 X Plus (pick
-  and run a profile, change what each button does, press a key to assign it, back up and restore).
-* **G502 X Plus onboard profiles** (command line): `hub profiles`, `hub button`, `hub profile`,
-  `hub backup`, `hub restore`. One button was remapped on the real mouse and worked; the factory
-  ROM profiles are copied to flash on the first edit (see `docs/DEVICES.md`).
-* **DualShock 4 speaker** (Bluetooth): `hub speaker ds4 file.wav` / `--tone HZ` and
-  `hub play ds4 song.mid --speaker`, with a built-in SBC encoder. Test tone verified on hardware.
-* Example MIDI replaced by a public-domain tune (`examples/ode-to-joy.mid`); the README explains how
-  far the Linux udev rules reach.
+Still **early and only tested on Linux** (the Windows and macOS builds have not been run yet).
+Everything marked "tested" below was tried on real hardware by the author.
+
+* **Logitech G502 X Plus: button remapping and onboard profiles.** In the app, a "Buttons and
+  profiles" card shows the profiles stored on the mouse, runs the one you pick, lets you choose what
+  every button does (mouse buttons, keyboard keys, media keys, DPI and profile functions, or
+  nothing) and saves or restores a backup. Buttons are named as printed on the mouse (G4 to G9).
+  The same from the command line: `hub profiles`, `hub button`, `hub profile`, `hub backup`,
+  `hub restore`. Tested. The mouse starts with read-only factory profiles; the first edit copies
+  them into its flash memory (details in `docs/DEVICES.md`), and restoring a backup made in that
+  state undoes it.
+* **DualShock 4 speaker** (Bluetooth): a "Speaker" card plays a MIDI or WAV file or a test tone
+  through the controller's built-in speaker; command line `hub speaker ds4 file.wav` /
+  `--tone HZ` and `hub play ds4 song.mid --speaker`. Uses a built-in SBC encoder. Tested.
+* **Steam Controller:** a "Haptic tones" card to try a pitch on each actuator; MIDI playback through
+  the haptics was already there. Tested.
+* The example MIDI is now a public-domain tune (`examples/ode-to-joy.mid`) instead of a transcription
+  of a copyrighted one, and the README explains how far the Linux udev rules reach.
 
 ## 0.1.0 — 2026-10-22
 
