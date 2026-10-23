@@ -20,24 +20,25 @@ macOS asks for **Input Monitoring** permission the first time (System Settings, 
 Read `README.md`, `docs/ARCHITECTURE.md` (crates, traits, how to add a driver), `docs/DEVICES.md`
 (protocols and what was verified on hardware) and `docs/ROADMAP.md` first.
 
-## Reported on macOS (not yet understood)
+## Reported on macOS
 
 1. **Steam Controller via the Puck: "completely overwrites the trackpad, and it is detected as a
-   keyboard".** Not reproduced on Linux. Written blind, **unverified on a Mac**:
-   * hidapi opens devices **exclusively on macOS by default**, which takes an interface away from
-     the system. `hub_core::new_api()` now turns that off (`set_open_exclusive(false)`), and every
-     HID open goes through it. If the problem is gone after this, that was the cause.
-   * `drv-steam` now never opens an interface whose usage page/usage is a generic-desktop keyboard
-     or mouse (`0x01/0x06`, `0x01/0x02`).
-   * Still to find out: why the hub lists it as a keyboard (or what "detected as a keyboard" means:
-     a row in the hub sidebar, a macOS permission prompt, or the system's Keyboard Setup Assistant?).
-     Run `hub raw | grep 28de` and `hub list`. Check that `interface_number()` really is 2..=5 for the
-     Puck's slots on macOS: `drv-steam` selects them by interface number, and hidapi may report -1
-     there. If it does, select by usage page (`0xFF00`) or by order instead.
-2. **DualShock 4: the MIDI player used only the rumble motors.** Fixed on Linux (see below), needs
-   a look on macOS (the speaker path writes 270 and 334-byte reports; the Windows/macOS HID layers
-   may want every report padded to the pad's full output report length, 547 bytes, see
-   `docs/DEVICES.md`).
+   keyboard".** Explained, **not a hub bug**: the Puck announces itself to macOS as a mouse and a
+   keyboard (its desktop emulation, see "Findings on macOS" below), and macOS then switches off the
+   laptop's built-in trackpad. It happens with the hub closed, and with `hub sniff` running it made
+   no difference. The Steam Controller's own trackpad does move the cursor. To check: System
+   Settings, Accessibility, Pointer Control, Alternative control methods, "Ignore built-in trackpad
+   when mouse or wireless trackpad is present" (if it is on, turn it off). Whether that setting is
+   the cause was **not confirmed yet**. Left in place, harmless: `hub_core::new_api()` opens
+   devices non-exclusively on macOS.
+   * Open defect: the `drv-steam` filter that skips the keyboard and mouse usages does not work on
+     macOS, because all collections of an interface share one path (hidapi lists the same path
+     four times, once per usage), so the interface is opened anyway.
+   * `hub sniff` fails on macOS with `IOHIDDeviceGetReport failed` for report `0x04`/`0x01`
+     (development helper only).
+2. **DualShock 4: the MIDI player used only the rumble motors.** Fixed on Linux. On macOS the
+   speaker stuttered because Bluetooth writes block for about 30 ms; see "Findings on macOS" and
+   the "macOS" paragraph in `docs/DEVICES.md`. It was not report padding.
 
 ## Findings on macOS (2026-10-23, Steam Controller Puck + DualShock 4 v2 over Bluetooth)
 
@@ -45,7 +46,8 @@ Read `README.md`, `docs/ARCHITECTURE.md` (crates, traits, how to add a driver), 
   `interface_number()` 2..=5 correctly (it is not -1), and each exposes usages `0001/0002`,
   `0001/0001`, `0001/0006` and `ff00/0001`: that is the controller's own keyboard/mouse emulation
   ("lizard mode"), which is what macOS sees as a keyboard. The hub does not list it as one. The
-  tone did not move the cursor; the GUI and the trackpad-takeover report are still untested.
+  tone did not move the cursor. The GUI lists the controller, its tones work, and it does not
+  change anything about the trackpad compared with the hub closed.
 * DS4 speaker: the stutter was throughput, not report padding (see "macOS" in `docs/DEVICES.md`).
   Fixed in part with `0x17` reports; still not as clean as on Linux. `--both` is untested on macOS.
 

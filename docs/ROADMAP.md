@@ -5,8 +5,11 @@ without the device being connected.
 
 ## Found while testing on macOS (open)
 
-See [HANDOFF.md](HANDOFF.md): the Steam Controller (through the Puck) takes over the trackpad and
-shows up as a keyboard; an exclusive-open fix is in but unverified on a Mac.
+See [HANDOFF.md](HANDOFF.md). The "Steam Controller takes over the trackpad" report is not caused
+by the hub: the Puck presents itself as a mouse and keyboard and macOS turns off the laptop's
+built-in trackpad (confirm the Accessibility setting). Still to fix: `drv-steam` cannot skip the
+keyboard/mouse collections on macOS (they share one path), `hub sniff` fails there, and the DualShock 4
+speaker is better but not as clean as on Linux.
 
 ## Before the next release (v0.1.1)
 

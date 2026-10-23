@@ -166,6 +166,12 @@ controller streams reports on its slot's interface (layout from SDL):
 
 Steam itself claims the controller when it runs; behaviour with Steam open was not checked.
 
+On macOS (checked on the Puck with one controller): every slot (HID interfaces 2 to 5) is listed
+with the usages `0001/0002`, `0001/0001`, `0001/0006` and `ff00/0001` under one path, which is the
+controller's own mouse and keyboard emulation next to the vendor reports the hub uses. macOS reacts
+to it by disabling the laptop's built-in trackpad (the Steam Controller's own trackpad moves the
+cursor), with or without the hub running. The hub reads the battery and plays tones there.
+
 ## RK S85 keyboard
 
 * **USB cable** (`258a:01fa`, `258a:0193`): the full open-s85 feature set (key mapping, lighting,
