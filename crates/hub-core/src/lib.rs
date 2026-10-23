@@ -279,8 +279,9 @@ pub enum Capability {
     Rumble(Vec<Motor>),
     /// Actuators that can play a pitch (this many voices), as the Steam Controller's haptics can.
     Tones(u8),
-    /// Remappable buttons and editable onboard profiles (this many profiles, this many buttons).
-    Profiles { profiles: u8, buttons: u8 },
+    /// Remappable buttons and editable onboard profiles: this many profiles and buttons, and the
+    /// names printed on the buttons when they are known (same order as the profile's buttons).
+    Profiles { profiles: u8, buttons: u8, labels: Vec<String> },
     /// A built-in speaker that plays audio streamed to it.
     Speaker,
     /// The device can run its own stored profile (onboard) or take settings from the host.

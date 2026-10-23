@@ -171,7 +171,7 @@ fn parse_action(s: &str) -> Result<ButtonAction> {
         "media" => ButtonAction::Consumer(u16::from_str_radix(rest, 16)?),
         "fn" => {
             let id = (0..=0x11u8)
-                .find(|&i| function_name(i).replace(' ', "-") == rest)
+                .find(|&i| function_name(i).replace(' ', "-").eq_ignore_ascii_case(rest))
                 .ok_or_else(|| anyhow::anyhow!("unknown function '{rest}'"))?;
             ButtonAction::Function { id, data: 0 }
         }
@@ -215,7 +215,7 @@ fn main() -> Result<()> {
                         Capability::HostMode => println!("    onboard/host mode"),
                         Capability::Tones(n) => println!("    tones: {n} voices"),
                         Capability::Speaker => println!("    speaker"),
-                        Capability::Profiles { profiles, buttons } => {
+                        Capability::Profiles { profiles, buttons, .. } => {
                             println!("    onboard profiles: {profiles} profiles, {buttons} buttons")
                         }
                         Capability::Rumble(m) => println!("    rumble: {}", m.iter().map(|m| m.label()).collect::<Vec<_>>().join(", ")),
@@ -381,6 +381,11 @@ fn main() -> Result<()> {
         }
         Cmd::Profiles { device } => {
             let d = find(&mut devices, &device)?;
+            let labels = d
+                .capabilities()
+                .into_iter()
+                .find_map(|c| if let Capability::Profiles { labels, .. } = c { Some(labels) } else { None })
+                .unwrap_or_default();
             for p in d.profiles()? {
                 println!(
                     "Profile {} {}{}: {} ms, DPI {:?} (default #{}, shift #{}), colour {:02x}{:02x}{:02x}",
@@ -396,7 +401,8 @@ fn main() -> Result<()> {
                     p.color.2
                 );
                 for (i, b) in p.buttons.iter().enumerate() {
-                    println!("  button {:>2}: {}", i + 1, b.label());
+                    let name = labels.get(i).map_or(String::new(), |l| format!(" ({l})"));
+                    println!("  button {:>2}{name}: {}", i + 1, b.label());
                 }
             }
         }

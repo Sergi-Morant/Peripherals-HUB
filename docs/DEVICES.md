@@ -42,10 +42,11 @@ key, `90 <id> 00 <data>` function (DPI shift, cycle profile...), macros `0x/1x`.
 * `hub restore` of a backup taken in that factory state **erases the flash directory** (all `ff`, as
   it was) instead of writing, which makes the mouse fall back to its ROM profiles. A backup of this
   mouse in its original state is what `hub backup` writes first.
-* Every write is read back and compared. Edited sectors must have a valid checksum first. Button
-  numbers in `hub profiles` are profile slots: slot 4 is **G4** (back), slot 6 is **G5** (forward).
-  The other slots are inferred from their default function (slot 5 DPI shift = the paddle, 7/8 tilt,
-  9 cycle profile, 10 next DPI, 11 previous DPI) and not matched to the labels on the mouse yet.
+* Every write is read back and compared. Edited sectors must have a valid checksum first.
+* Button slots of the G502 X Plus, matched to the physical buttons by sending a different letter
+  from each slot and pressing every button: 1 left, 2 right, 3 wheel click, **4 = G4** (back),
+  **5 = G6** (the paddle, DPI shift), **6 = G5** (forward), 7/8 wheel tilt left/right,
+  **9 = G9** (cycle profile), **10 = G8** (next DPI), **11 = G7** (previous DPI).
 * After an edit the mouse must run that profile: `hub profile g502 1` switches (the driver does it
   by itself when the edited profile was the running one). The mouse was running profile 2 when
   first checked, so the edit only showed after switching to profile 1.

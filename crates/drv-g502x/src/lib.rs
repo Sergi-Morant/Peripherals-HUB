@@ -220,6 +220,18 @@ impl Driver for G502xDriver {
     }
 }
 
+/// Names of the profile button slots as printed on a G502 X (slots 4 and 6 and the rest were matched
+/// to the physical buttons one by one on a G502 X Plus). Empty for other mice.
+fn button_labels(mouse: &str, buttons: u8) -> Vec<String> {
+    const G502X: [&str; 11] =
+        ["left", "right", "wheel click", "G4", "G6", "G5", "wheel tilt left", "wheel tilt right", "G9", "G8", "G7"];
+    if mouse.to_uppercase().contains("G502 X") && buttons as usize == G502X.len() {
+        G502X.iter().map(|s| s.to_string()).collect()
+    } else {
+        vec![]
+    }
+}
+
 /// Effect ids of 0x8071 and where their parameters sit in the 10-byte block (big-endian):
 /// Static: colour@0..3. Breathe: colour@0..3, period@3..5, form@5, intensity@6.
 /// Cycle: period@5..7, intensity@7.
@@ -444,6 +456,7 @@ pub struct G502x {
 
 impl G502x {
     fn new(h: Hidpp, info: Info) -> G502x {
+        let info_name = info.name.clone();
         let mut caps = vec![];
         if h.feature(F_UNIFIED_BATTERY).ok().flatten().is_some() || h.feature(F_BATTERY_LEVEL).ok().flatten().is_some() {
             caps.push(Capability::Battery);
@@ -480,7 +493,11 @@ impl G502x {
             caps.push(Capability::HostMode);
             if let Ok(d) = h.onboard_description(ix) {
                 if d.supported() {
-                    caps.push(Capability::Profiles { profiles: d.profile_count, buttons: d.button_count });
+                    caps.push(Capability::Profiles {
+                        profiles: d.profile_count,
+                        buttons: d.button_count,
+                        labels: button_labels(&info_name, d.button_count),
+                    });
                 }
             }
         }
@@ -673,6 +690,13 @@ impl Peripheral for G502x {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn g502x_buttons_have_labels() {
+        assert_eq!(button_labels("G502 X PLUS", 11)[5], "G5");
+        assert!(button_labels("G502 X PLUS", 9).is_empty());
+        assert!(button_labels("Other mouse", 11).is_empty());
+    }
 
     #[test]
     fn dpi_list_expands_step_ranges() {

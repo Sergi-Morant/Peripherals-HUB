@@ -17,7 +17,7 @@ Found while checking what is public after v0.1.0 was published:
 1. **Mouse buttons and profiles (G502 X Plus), GUI and the rest.** Reading, backup/restore and
    button remapping work from the command line (see `docs/DEVICES.md`). Missing: a GUI panel,
    macros, the G-shift layer, DPI steps/polling/colour/name per profile, adding and removing
-   profiles, matching every slot to the labels on the mouse (only G4 and G5 are confirmed).
+   profiles.
 2. **Windows and macOS first run.** Test the CI builds, fix what breaks, add the missing battery
    sources (Xbox via XInput/WinRT BLE battery, macOS IOKit) and Windows permissions notes.
 3. **Remembered settings.** Store each device's colour/effect/DPI per serial and re-apply it when
