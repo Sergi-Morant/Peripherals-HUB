@@ -63,7 +63,14 @@ sudo cp packaging/linux/70-hub.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo udevadm trigger
 ```
 
-Without these rules the devices are listed but cannot be opened ("Permission denied"). Bluetooth
+Without these rules the devices are listed but cannot be opened ("Permission denied").
+
+**What the rules allow:** they give the logged-in desktop user raw (`hidraw`) access to every HID
+device made by Logitech, Sony, Microsoft, Valve, Nintendo and SINOWEALTH (RK), which includes their
+keyboards and mice, not only the supported models. That is the usual approach for tools like this,
+but any program you run could then read or send raw reports to those devices. If you do not want
+that, edit the copy in `/etc/udev/rules.d/` and replace the vendor match with `ATTRS{idProduct}`
+lines for just the devices you own (`hub list` shows the ids). Bluetooth
 battery levels of Xbox controllers and the RK S85 keyboard are read with `bluetoothctl`
 (BlueZ). For the keyboard's configuration pages connect it by USB cable and close the official RK
 app.
@@ -92,7 +99,7 @@ hub rate g502 500                          # polling rate in Hz (needs host mode
 hub mode g502 host|onboard|show
 hub rumble xbox --strong 60 --right 40 --ms 600
 hub tone steam --voice 0 --hz 220
-hub play steam examples/imperial-march-opening.mid
+hub play steam examples/ode-to-joy.mid
 hub raw | hub probe | hub steam | hub sniff 045e:0b13   # development helpers
 ```
 

@@ -209,6 +209,13 @@ mod tests {
     }
 
     #[test]
+    fn parses_the_example_file() {
+        let notes = parse(include_bytes!("../../../examples/ode-to-joy.mid")).unwrap();
+        assert_eq!(notes.len(), 62);
+        assert_eq!(notes[0].key, 64);
+    }
+
+    #[test]
     fn rejects_garbage() {
         assert!(parse(b"not midi").is_err());
     }

@@ -37,7 +37,7 @@ enum Cmd {
         #[arg(long, default_value_t = 600)]
         ms: u64,
     },
-    /// Play a MIDI file through a device: `hub play steam examples/imperial-march-opening.mid`.
+    /// Play a MIDI file through a device: `hub play steam examples/ode-to-joy.mid`.
     Play { device: String, file: std::path::PathBuf },
     /// Play a tone on a voice (Steam Controller haptics): `hub tone steam --voice 0 --hz 220`.
     Tone {

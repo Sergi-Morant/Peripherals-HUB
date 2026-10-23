@@ -7,13 +7,10 @@ without the device being connected.
 
 Found while checking what is public after v0.1.0 was published:
 
-* **Replace the example MIDI file.** `examples/imperial-march-opening.mid` is a short transcription
-  of a copyrighted melody. Swap it for a public-domain tune (for example "Ode to Joy") and update
-  the README and `docs/DEVICES.md` references.
-* **Document the udev rules' reach.** `packaging/linux/70-hub.rules` gives the logged-in desktop
-  user raw access to every HID device of Logitech, Sony, Microsoft, Valve, Nintendo and SINOWEALTH,
-  keyboards and mice included. That is the usual approach for tools like this, but say so in the
-  README, and consider narrowing the rules to the product ids actually supported.
+* ~~Replace the example MIDI file~~ done: `examples/ode-to-joy.mid` (public domain), with a test
+  that parses it.
+* ~~Document the udev rules' reach~~ done in the README. Still open: narrow the rules to the
+  product ids actually supported.
 
 ## Next
 
